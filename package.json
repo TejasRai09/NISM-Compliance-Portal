@@ -1,0 +1,11 @@
+{
+  "name": "nism-portal",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "prestart": "npm --prefix backend install && npm --prefix frontend install && npm --prefix frontend run build",
+    "start": "npm --prefix backend start"
+  },
+  "devDependencies": {}
+}
