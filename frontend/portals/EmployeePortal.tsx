@@ -267,6 +267,8 @@ const EmployeePortal = ({ employee, onLogout }: { employee: Employee | null; onL
                         <option value="Compliant">Compliant Only</option>
                         <option value="Expiring Soon">Expiring Soon</option>
                         <option value="Expired">Expired Only</option>
+                        <option value="Pending Approval">Pending Approval</option>
+                        <option value="Rejected">Rejected</option>
                       </select>
                     </div>
                   </div>

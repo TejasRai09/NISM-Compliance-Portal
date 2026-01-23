@@ -21,7 +21,7 @@ import {
   User,
   Users
 } from 'lucide-react';
-import type { ActiveView, Certificate, Employee } from '../types';
+import type { ActiveView, Certificate, CertStatus, Employee } from '../types';
 import { LOGO_URL, MOCK_EMPLOYEES, PENDING_REVIEWS } from '../data';
 import { getStatusColor } from '../utils';
 import BackgroundDecoration from '../components/BackgroundDecoration';
@@ -37,6 +37,7 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [deptFilter, setDeptFilter] = useState('All');
   const [certSearchTerm, setCertSearchTerm] = useState('');
+  const [certStatusFilter, setCertStatusFilter] = useState<CertStatus | 'All'>('All');
   const [isLoadingEmployees, setIsLoadingEmployees] = useState(false);
   const [employeesError, setEmployeesError] = useState<string | null>(null);
   const [employeePage, setEmployeePage] = useState(1);
@@ -112,13 +113,15 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
   }, []);
 
   const filteredCertificates = useMemo(() => {
-    return allCertificates.filter(
-      (c) =>
+    return allCertificates.filter((c) => {
+      const matchesSearch =
         c.moduleName.toLowerCase().includes(certSearchTerm.toLowerCase()) ||
         c.certNumber.toLowerCase().includes(certSearchTerm.toLowerCase()) ||
-        c.employeeName?.toLowerCase().includes(certSearchTerm.toLowerCase())
-    );
-  }, [allCertificates, certSearchTerm]);
+        c.employeeName?.toLowerCase().includes(certSearchTerm.toLowerCase());
+      const matchesStatus = certStatusFilter === 'All' || c.status === certStatusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [allCertificates, certSearchTerm, certStatusFilter]);
 
   const certificateTotalPages = Math.max(1, Math.ceil(filteredCertificates.length / pageSize));
   const currentCertificatePage = Math.min(certificatePage, certificateTotalPages);
@@ -191,7 +194,7 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
 
   useEffect(() => {
     setCertificatePage(1);
-  }, [certSearchTerm]);
+  }, [certSearchTerm, certStatusFilter]);
 
   const handleReviewAction = async (id: string, action: 'approve' | 'reject') => {
     try {
@@ -559,17 +562,31 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
 
             {view === 'certificates' && (
               <motion.div key="admin-certs" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
-                <div className="p-6 border-b border-slate-50 flex justify-between items-center">
+                <div className="p-6 border-b border-slate-50 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
                   <h2 className="text-xl font-bold text-slate-800">Organizational Certifications</h2>
-                  <div className="relative w-72">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                    <input
-                      type="text"
-                      placeholder="Search by name, module or cert #..."
-                      value={certSearchTerm}
-                      onChange={(e) => setCertSearchTerm(e.target.value)}
-                      className={`${inputBaseClass} pl-10 w-full`}
-                    />
+                  <div className="flex flex-col md:flex-row items-stretch md:items-center gap-4 w-full xl:w-auto">
+                    <div className="relative w-full md:w-72">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                      <input
+                        type="text"
+                        placeholder="Search by name, module or cert #..."
+                        value={certSearchTerm}
+                        onChange={(e) => setCertSearchTerm(e.target.value)}
+                        className={`${inputBaseClass} pl-10 w-full`}
+                      />
+                    </div>
+                    <select
+                      value={certStatusFilter}
+                      onChange={(e) => setCertStatusFilter(e.target.value as CertStatus | 'All')}
+                      className={`${inputBaseClass} w-full md:w-52 cursor-pointer font-medium text-slate-600`}
+                    >
+                      <option value="All">All Statuses</option>
+                      <option value="Compliant">Compliant</option>
+                      <option value="Expiring Soon">Expiring Soon</option>
+                      <option value="Expired">Expired</option>
+                      <option value="Pending Approval">Pending Approval</option>
+                      <option value="Rejected">Rejected</option>
+                    </select>
                   </div>
                 </div>
                 <div className="overflow-x-auto">

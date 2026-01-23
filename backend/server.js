@@ -268,11 +268,14 @@ app.get('/api/admin/stats', async (req, res) => {
 
 app.get('/api/admin/module-stats', async (req, res) => {
   try {
-    const [[{ totalCertificates }]] = await pool.query('SELECT COUNT(*) AS totalCertificates FROM certificates');
+    const [[{ totalCertificates }]] = await pool.query(
+      "SELECT COUNT(*) AS totalCertificates FROM certificates WHERE status IN ('Compliant','Expiring Soon')"
+    );
     const [rows] = await pool.query(
       `
       SELECT module_name AS moduleName, COUNT(*) AS moduleCount
       FROM certificates
+      WHERE status IN ('Compliant','Expiring Soon')
       GROUP BY module_name
       ORDER BY moduleCount DESC, module_name ASC
       `
