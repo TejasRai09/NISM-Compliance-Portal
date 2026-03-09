@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowRight, Eye, EyeOff, Lock, Mail, ShieldCheck, User } from 'lucide-react';
+import { ArrowRight, Eye, EyeOff, Lock, Mail, ShieldCheck } from 'lucide-react';
 import type { Employee, UserRole } from '../types';
 import BackgroundDecoration from '../components/BackgroundDecoration';
 import { LOGO_URL } from '../data';
@@ -161,23 +161,6 @@ const LoginPage = ({ onLogin }: { onLogin: (role: UserRole, employee?: Employee)
       setIsSubmitting(false);
     }
   };
-  const handleQuickLogin = async (role: UserRole) => {
-    setIsLoggingIn(role);
-    if (role === 'employee') {
-      try {
-        const res = await fetch('/api/employees');
-        const payload = await res.json();
-        const firstEmployee = payload?.data?.[0];
-        onLogin('employee', firstEmployee);
-        return;
-      } catch {
-        setIsLoggingIn(null);
-        setStatusMessage('Unable to load demo employee.');
-        return;
-      }
-    }
-    setTimeout(() => onLogin(role), 1800);
-  };
   const inputClass =
     'w-full bg-slate-50 border border-slate-200 rounded-2xl px-12 py-4 text-sm text-slate-900 focus:ring-2 ring-blue-100 focus:bg-white focus:border-blue-400 transition-all outline-none placeholder:text-slate-400 shadow-sm';
 
@@ -206,8 +189,8 @@ const LoginPage = ({ onLogin }: { onLogin: (role: UserRole, employee?: Employee)
             <img src={LOGO_URL} alt="Logo" className="w-full h-auto object-contain block mx-auto" />
           </motion.div>
           <div className="text-center">
-            <h1 className="text-2xl font-black zuari-blue tracking-tighter leading-none mb-2">NISM Compliance</h1>
-            <p className="text-slate-400 text-[10px] font-bold tracking-[0.2em] uppercase">Secured Enterprise Access</p>
+            <h1 className="text-2xl font-black zuari-blue tracking-tighter leading-none mb-2">Z-PRISM</h1>
+            <p className="text-slate-400 text-[10px] font-bold tracking-[0.2em] uppercase">One place for all professional certificates.</p>
           </div>
         </div>
         <AnimatePresence mode="wait">
@@ -431,31 +414,7 @@ const LoginPage = ({ onLogin }: { onLogin: (role: UserRole, employee?: Employee)
                 </form>
               )}
 
-              {mode === 'login' && (
-                <>
-                  <div className="flex items-center my-10">
-                    <div className="flex-1 h-px bg-slate-100" />
-                    <span className="px-4 text-[10px] font-bold text-slate-300 uppercase tracking-widest">Quick Access (Demo)</span>
-                    <div className="flex-1 h-px bg-slate-100" />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <button
-                      onClick={() => handleQuickLogin('employee')}
-                      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-slate-50 border border-slate-100 text-slate-500 hover:bg-blue-50 hover:border-blue-200 hover:text-blue-600 transition-all font-bold text-[11px] uppercase tracking-wider"
-                    >
-                      <User size={14} />
-                      <span>Employee</span>
-                    </button>
-                    <button
-                      onClick={() => handleQuickLogin('admin')}
-                      className="flex items-center justify-center space-x-2 p-3 rounded-2xl bg-slate-50 border border-slate-100 text-slate-500 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-600 transition-all font-bold text-[11px] uppercase tracking-wider"
-                    >
-                      <ShieldCheck size={14} />
-                      <span>Admin</span>
-                    </button>
-                  </div>
-                </>
-              )}
+
             </motion.div>
           ) : (
             <motion.div key="loading" className="flex flex-col items-center justify-center py-10">

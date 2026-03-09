@@ -12,7 +12,7 @@ const ProfileView = ({ employee }: { employee: Employee | null }) => {
     );
   }
   const detailItems = [
-    { icon: IdCard, label: 'Employee Number', value: employee.employeeNumber },
+    { icon: IdCard, label: 'Employee ID', value: employee.employeeNumber },
     { icon: User, label: 'Employee Name', value: employee.name },
     { icon: UserCircle2, label: 'Manager Name', value: employee.managerName },
     { icon: Mail, label: 'Email Address', value: employee.email },

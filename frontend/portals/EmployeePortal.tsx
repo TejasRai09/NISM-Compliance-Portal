@@ -192,7 +192,7 @@ const EmployeePortal = ({ employee, onLogout }: { employee: Employee | null; onL
           <header className="flex justify-between items-center mb-10">
             <div>
               <h1 className="text-3xl font-black text-slate-800 tracking-tight">
-                {view === 'dashboard' ? 'Compliance Overview' : view === 'upload' ? 'Upload Certification' : 'Employee Profile'}
+                {view === 'dashboard' ? 'Certification Overview' : view === 'upload' ? 'Upload Certification' : 'Employee Profile'}
               </h1>
               <p className="text-slate-500 mt-1 font-medium tracking-tight">
                 Portal: {currentEmployee?.name || 'Employee'} • Zuari Finserv Ltd
@@ -211,7 +211,7 @@ const EmployeePortal = ({ employee, onLogout }: { employee: Employee | null; onL
               >
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                   <StatCard
-                    title="Total Modules"
+                    title="Total Certificates"
                     value={stats.total}
                     icon={FileText}
                     colorClass="bg-blue-50 text-blue-600"
@@ -363,7 +363,7 @@ const EmployeePortal = ({ employee, onLogout }: { employee: Employee | null; onL
                     </div>
                     <form onSubmit={handleUpload} className="space-y-6 relative z-10">
                       <div>
-                        <label className="block text-sm font-bold text-slate-700 mb-2">NISM Module</label>
+                        <label className="block text-sm font-bold text-slate-700 mb-2">Type of the Certificate</label>
                         <select name="moduleName" required className={`${inputBaseClass} w-full`}>
                           <option value="">Select Module</option>
                           {moduleOptions.map((name) => (

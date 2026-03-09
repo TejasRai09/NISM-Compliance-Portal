@@ -7,6 +7,8 @@ import os from 'os';
 import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
+import cron from 'node-cron';
+import xlsx from 'xlsx';
 import { pingDb, pool } from './db.js';
 
 dotenv.config();
@@ -23,17 +25,16 @@ const uploadsDir = path.resolve(__dirname, 'uploads');
 const otpStore = new Map();
 const resetOtpStore = new Map();
 
-const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
-const smtpPort = Number(process.env.SMTP_PORT || 587);
-const smtpSecure = String(process.env.SMTP_SECURE || 'false') === 'true';
-const smtpUser = process.env.SMTP_USER || '';
-const smtpPass = process.env.SMTP_PASS || '';
+const smtpUser = process.env.OUTLOOK_USER || process.env.SMTP_USER || '';
 
 const mailer = nodemailer.createTransport({
-  host: smtpHost,
-  port: smtpPort,
-  secure: smtpSecure,
-  auth: smtpUser && smtpPass ? { user: smtpUser, pass: smtpPass } : undefined
+  host: 'smtpout.secureserver.net',
+  port: 587,
+  secure: false,
+  auth: {
+    user: process.env.OUTLOOK_USER || 'YOUR_OUTLOOK_ADDRESS',
+    pass: process.env.OUTLOOK_PASS || 'YOUR_OUTLOOK_PASSWORD'
+  }
 });
 
 app.use(cors());
@@ -60,6 +61,118 @@ const calculateStatus = (expiryDate) => {
   if (diffDays <= 60) return 'Expiring Soon';
   return 'Compliant';
 };
+
+// ─── Expiry Reminder Logic ───────────────────────────────────────────────────
+
+const sendExpiryReminders = async () => {
+  let totalSent = 0;
+  const errors = [];
+
+  // ── Step 1: Mark all past-due certificates as Expired ─────────────────────
+  try {
+    const [expiredResult] = await pool.query(
+      `UPDATE certificates SET status = 'Expired'
+       WHERE expiry_date < CURDATE()
+         AND status IN ('Compliant', 'Expiring Soon')`
+    );
+    if (expiredResult.affectedRows > 0) {
+      // eslint-disable-next-line no-console
+      console.log(`[Reminders] Marked ${expiredResult.affectedRows} past-due certificate(s) as Expired.`);
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[Reminders] Error updating expired statuses:', String(err));
+    errors.push(`Status sweep error: ${String(err)}`);
+  }
+
+  // ── Step 2: Send reminder emails ──────────────────────────────────────────
+  // 0 = expires today, 30/60/90 = days until expiry
+  const thresholds = [90, 60, 30, 0];
+
+  for (const days of thresholds) {
+    const isExpiredToday = days === 0;
+
+    // For expiry-today, query status still Compliant/Expiring Soon just before
+    // the sweep above ran, so we re-query using expiry_date = CURDATE()
+    // and include 'Expired' status since the sweep above already flipped them.
+    const statusFilter = isExpiredToday
+      ? `c.expiry_date = CURDATE() AND c.status = 'Expired'`
+      : `c.expiry_date = DATE_ADD(CURDATE(), INTERVAL ${days} DAY) AND c.status IN ('Compliant', 'Expiring Soon')`;
+
+    try {
+      const [rows] = await pool.query(
+        `
+        SELECT
+          c.id,
+          c.module_name        AS moduleName,
+          c.cert_number        AS certNumber,
+          c.expiry_date        AS expiryDate,
+          e.employee_name      AS employeeName,
+          e.email              AS employeeEmail,
+          e.manager_email      AS managerEmail
+        FROM certificates c
+        JOIN employees e ON e.employee_number = c.employee_number
+        WHERE
+          ${statusFilter}
+          AND e.email IS NOT NULL
+          AND e.email <> ''
+        `
+      );
+
+      for (const row of rows) {
+        const formattedExpiry = new Date(row.expiryDate).toLocaleDateString('en-IN', {
+          day: '2-digit', month: 'long', year: 'numeric'
+        });
+
+        let subject, body;
+
+        if (isExpiredToday) {
+          subject = `🔴 Certificate Expired – Immediate Action Required`;
+          body = `Dear ${row.employeeName},\n\nThis is an automated notification from Z-PRISM (Zuari Professional Records & Information System for Management).\n\nYour certificate for the module "${row.moduleName}" (Certificate No: ${row.certNumber}) has expired today, ${formattedExpiry}.\n\nYour compliance status has been updated to EXPIRED. Please renew your certification immediately and upload the new certificate on the Z-PRISM portal to restore your compliant status.\n\nFor any assistance, please contact your HR or compliance team.\n\nRegards,\nZ-PRISM Compliance System\nZuari Finserv Ltd`;
+        } else {
+          const urgency = days <= 30 ? '🔴' : days <= 60 ? '🟠' : '🟡';
+          subject = `${urgency} Certificate Expiry Reminder – ${days} Days Remaining`;
+          body = `Dear ${row.employeeName},\n\nThis is an automated reminder from Z-PRISM (Zuari Professional Records & Information System for Management).\n\nYour certificate for the module "${row.moduleName}" (Certificate No: ${row.certNumber}) is due to expire on ${formattedExpiry} — that is ${days} days from today.\n\nPlease initiate your renewal process well in advance to avoid a lapse in compliance.\n\nRegards,\nZ-PRISM Compliance System\nZuari Finserv Ltd`;
+        }
+
+        const recipients = [row.employeeEmail];
+        if (row.managerEmail && row.managerEmail !== row.employeeEmail) {
+          recipients.push(row.managerEmail);
+        }
+
+        await mailer.sendMail({
+          from: smtpUser || 'no-reply@adventz.com',
+          to: recipients.join(','),
+          subject,
+          text: body
+        });
+
+        totalSent++;
+      }
+
+      const label = isExpiredToday ? 'Expired today' : `${days}-day`;
+      // eslint-disable-next-line no-console
+      console.log(`[Reminders] ${label} threshold: ${rows.length} email(s) sent.`);
+    } catch (err) {
+      const label = isExpiredToday ? 'expired-today' : `${days}-day`;
+      const msg = `[Reminders] Error processing ${label} threshold: ${String(err)}`;
+      // eslint-disable-next-line no-console
+      console.error(msg);
+      errors.push(msg);
+    }
+  }
+
+  return { totalSent, errors };
+};
+
+// Run daily at 9:00 AM server time
+cron.schedule('0 9 * * *', async () => {
+  // eslint-disable-next-line no-console
+  console.log('[Reminders] Running scheduled expiry reminder job...');
+  await sendExpiryReminders();
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'nism-backend', time: new Date().toISOString() });
@@ -290,6 +403,89 @@ app.get('/api/admin/module-stats', async (req, res) => {
     res.json({ status: 'ok', data });
   } catch (error) {
     res.status(500).json({ status: 'error', message: 'Failed to load module stats', error: String(error) });
+  }
+});
+
+app.get('/api/admin/master-report', async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `
+      SELECT
+        e.employee_number   AS "Employee ID",
+        e.employee_name     AS "Employee Name",
+        e.designation       AS "Designation",
+        e.department        AS "Department",
+        e.location          AS "Location",
+        e.email             AS "Email",
+        e.phone             AS "Phone",
+        e.manager_employee_name AS "Manager Name",
+        e.manager_email     AS "Manager Email",
+        c.module_name       AS "Certificate Type",
+        c.cert_number       AS "Certificate Number",
+        c.issue_date        AS "Issue Date",
+        c.expiry_date       AS "Expiry Date",
+        c.status            AS "Status"
+      FROM employees e
+      LEFT JOIN certificates c ON c.employee_number = e.employee_number
+      ORDER BY e.employee_name ASC, c.expiry_date ASC
+      `
+    );
+
+    // Format dates to readable strings
+    const formatted = rows.map((row) => ({
+      ...row,
+      'Issue Date': row['Issue Date']
+        ? new Date(row['Issue Date']).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+        : '',
+      'Expiry Date': row['Expiry Date']
+        ? new Date(row['Expiry Date']).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+        : ''
+    }));
+
+    const wb = xlsx.utils.book_new();
+
+    // Sheet 1: Master Report
+    const wsMaster = xlsx.utils.json_to_sheet(formatted);
+    // Auto column widths
+    const colWidths = Object.keys(formatted[0] || {}).map((key) => ({
+      wch: Math.max(key.length, ...formatted.map((r) => String(r[key] ?? '').length)) + 2
+    }));
+    wsMaster['!cols'] = colWidths;
+    xlsx.utils.book_append_sheet(wb, wsMaster, 'Master Report');
+
+    // Sheet 2: Summary by Department
+    const [deptRows] = await pool.query(
+      `
+      SELECT
+        e.department                                                              AS "Department",
+        COUNT(DISTINCT e.employee_number)                                         AS "Total Employees",
+        SUM(CASE WHEN c.status = 'Compliant' THEN 1 ELSE 0 END)                  AS "Compliant",
+        SUM(CASE WHEN c.status = 'Expiring Soon' THEN 1 ELSE 0 END)              AS "Expiring Soon",
+        SUM(CASE WHEN c.status = 'Expired' THEN 1 ELSE 0 END)                   AS "Expired",
+        SUM(CASE WHEN c.status = 'Pending Approval' THEN 1 ELSE 0 END)           AS "Pending Approval",
+        SUM(CASE WHEN c.status = 'Rejected' THEN 1 ELSE 0 END)                  AS "Rejected"
+      FROM employees e
+      LEFT JOIN certificates c ON c.employee_number = e.employee_number
+      WHERE e.department IS NOT NULL AND e.department <> ''
+      GROUP BY e.department
+      ORDER BY e.department ASC
+      `
+    );
+    const wsSummary = xlsx.utils.json_to_sheet(deptRows);
+    const summaryWidths = Object.keys(deptRows[0] || {}).map((key) => ({
+      wch: Math.max(key.length, ...deptRows.map((r) => String(r[key] ?? '').length)) + 2
+    }));
+    wsSummary['!cols'] = summaryWidths;
+    xlsx.utils.book_append_sheet(wb, wsSummary, 'Department Summary');
+
+    const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const filename = `ZPRISM_Master_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to generate master report', error: String(error) });
   }
 });
 
@@ -664,6 +860,26 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'Email and password are required.' });
     }
 
+    // ── Check admins table first ───────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS admins (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        email VARCHAR(255) NOT NULL UNIQUE,
+        password_hash VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    const [admins] = await pool.query('SELECT email, password_hash FROM admins WHERE email = ?', [normalizedEmail]);
+    if (admins.length > 0) {
+      const isValid = await bcrypt.compare(password, admins[0].password_hash);
+      if (!isValid) {
+        return res.status(401).json({ status: 'error', message: 'Invalid credentials.' });
+      }
+      return res.json({ status: 'ok', role: 'admin' });
+    }
+
+    // ── Check employees / users table ─────────────────────────────────────
     await pool.query(
       `
       CREATE TABLE IF NOT EXISTS users (
@@ -711,6 +927,20 @@ app.post('/api/auth/login', async (req, res) => {
     res.json({ status: 'ok', role: 'employee', employee: employeeRows[0] });
   } catch (error) {
     res.status(500).json({ status: 'error', message: 'Failed to login', error: String(error) });
+  }
+});
+
+app.post('/api/admin/send-reminders', async (req, res) => {
+  try {
+    const result = await sendExpiryReminders();
+    res.json({
+      status: 'ok',
+      message: `Reminder job completed. ${result.totalSent} email(s) sent.`,
+      totalSent: result.totalSent,
+      errors: result.errors
+    });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to send reminders', error: String(error) });
   }
 });
 

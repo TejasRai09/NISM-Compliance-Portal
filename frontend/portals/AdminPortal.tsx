@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   BarChart3,
+  Bell,
   CheckCircle,
   ClipboardList,
   Clock,
@@ -58,6 +59,29 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | undefined>(undefined);
+
+  const [isSendingReminders, setIsSendingReminders] = useState(false);
+  const [reminderToast, setReminderToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  const handleSendReminders = async () => {
+    setIsSendingReminders(true);
+    setReminderToast(null);
+    try {
+      const res = await fetch('/api/admin/send-reminders', { method: 'POST' });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.message || 'Failed to send reminders');
+      setReminderToast({ message: payload.message, type: 'success' });
+    } catch (error) {
+      setReminderToast({ message: String(error), type: 'error' });
+    } finally {
+      setIsSendingReminders(false);
+      setTimeout(() => setReminderToast(null), 5000);
+    }
+  };
+
+  const handleDownloadMasterReport = () => {
+    window.open('/api/admin/master-report', '_blank');
+  };
 
   const loadEmployees = async () => {
     setIsLoadingEmployees(true);
@@ -325,6 +349,37 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
               </h1>
               <p className="text-slate-500 mt-1 font-medium tracking-tight">Managing compliance for Zuari Finserv Ltd</p>
             </div>
+            {view === 'dashboard' && (
+              <div className="flex flex-col items-end gap-3">
+                {reminderToast && (
+                  <div
+                    className={`px-5 py-2.5 rounded-full text-xs font-bold uppercase tracking-widest shadow-lg ${
+                      reminderToast.type === 'success'
+                        ? 'bg-emerald-600 text-white shadow-emerald-200'
+                        : 'bg-rose-600 text-white shadow-rose-200'
+                    }`}
+                  >
+                    {reminderToast.message}
+                  </div>
+                )}
+                <button
+                  onClick={handleSendReminders}
+                  disabled={isSendingReminders}
+                  className="flex items-center space-x-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white px-6 py-4 rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-amber-100 transition-all"
+                >
+                  <Bell size={16} />
+                  <span>{isSendingReminders ? 'Sending...' : 'Send Expiry Reminders'}</span>
+                </button>
+                <button
+                  onClick={handleDownloadMasterReport}
+                  className="flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-4 rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-emerald-100 transition-all"
+                >
+                  <Download size={16} />
+                  <span>Download Master Report</span>
+                </button>
+                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Alerts at 30, 60 &amp; 90 days • Auto-runs daily at 9 AM</p>
+              </div>
+            )}
             {view === 'employees' && (
               <button
                 onClick={() => {
@@ -338,9 +393,11 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
               </button>
             )}
             {view === 'certificates' && (
-              <button className="bg-emerald-600 text-white px-6 py-4 rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-emerald-100 hover:bg-emerald-700 transition-all flex items-center space-x-2">
+              <button
+                onClick={handleDownloadMasterReport}
+                className="bg-emerald-600 text-white px-6 py-4 rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-emerald-100 hover:bg-emerald-700 transition-all flex items-center space-x-2">
                 <Download size={18} />
-                <span>Export All</span>
+                <span>Download Master Report</span>
               </button>
             )}
           </header>
