@@ -190,7 +190,7 @@ const LoginPage = ({ onLogin }: { onLogin: (role: UserRole, employee?: Employee)
           </motion.div>
           <div className="text-center">
             <h1 className="text-2xl font-black zuari-blue tracking-tighter leading-none mb-2">Z-PRISM</h1>
-            <p className="text-slate-400 text-[10px] font-bold tracking-[0.2em] uppercase">One place for all professional certificates.</p>
+            <p className="text-slate-400 text-[10px] font-bold tracking-[0.2em] uppercase">Zuari Professional Records &amp; Information System for Management</p>
           </div>
         </div>
         <AnimatePresence mode="wait">

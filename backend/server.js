@@ -25,16 +25,17 @@ const uploadsDir = path.resolve(__dirname, 'uploads');
 const otpStore = new Map();
 const resetOtpStore = new Map();
 
-const smtpUser = process.env.OUTLOOK_USER || process.env.SMTP_USER || '';
+const smtpHost = process.env.SMTP_HOST || process.env.OUTLOOK_HOST || 'smtp.office365.com';
+const smtpPort = Number(process.env.SMTP_PORT || process.env.OUTLOOK_PORT || 587);
+const smtpSecure = String(process.env.SMTP_SECURE || process.env.OUTLOOK_SECURE || 'false').toLowerCase() === 'true';
+const smtpUser = process.env.SMTP_USER || process.env.OUTLOOK_USER || '';
+const smtpPass = process.env.SMTP_PASS || process.env.OUTLOOK_PASS || '';
 
 const mailer = nodemailer.createTransport({
-  host: 'smtpout.secureserver.net',
-  port: 587,
-  secure: false,
-  auth: {
-    user: process.env.OUTLOOK_USER || 'YOUR_OUTLOOK_ADDRESS',
-    pass: process.env.OUTLOOK_PASS || 'YOUR_OUTLOOK_PASSWORD'
-  }
+  host: smtpHost,
+  port: smtpPort,
+  secure: smtpSecure,
+  auth: smtpUser && smtpPass ? { user: smtpUser, pass: smtpPass } : undefined
 });
 
 app.use(cors());
@@ -64,7 +65,113 @@ const calculateStatus = (expiryDate) => {
 
 // ─── Expiry Reminder Logic ───────────────────────────────────────────────────
 
-const sendExpiryReminders = async () => {
+const getReminderType = (daysToExpiry, mode) => {
+  if (mode === 'scheduled') {
+    if (daysToExpiry === 90) return '90-day';
+    if (daysToExpiry === 60) return '60-day';
+    if (daysToExpiry === 30) return '30-day';
+    if (daysToExpiry === 0) return 'expired';
+    return null;
+  }
+
+  if (daysToExpiry <= 0) return 'expired';
+  if (daysToExpiry <= 30) return '30-day';
+  if (daysToExpiry <= 60) return '60-day';
+  if (daysToExpiry <= 90) return '90-day';
+  return null;
+};
+
+const ensureReminderTrackingTable = async () => {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS certificate_reminders (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      certificate_id INT NOT NULL,
+      reminder_type VARCHAR(20) NOT NULL,
+      sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uniq_cert_reminder (certificate_id, reminder_type)
+    )
+  `);
+};
+
+const getReminderPreview = async ({ mode = 'scheduled' } = {}) => {
+  const dueClause = mode === 'scheduled'
+    ? 'DATEDIFF(c.expiry_date, CURDATE()) IN (90, 60, 30, 0)'
+    : 'DATEDIFF(c.expiry_date, CURDATE()) <= 90';
+
+  await ensureReminderTrackingTable();
+
+  const [rows] = await pool.query(
+    `
+    SELECT
+      c.id                      AS certificateId,
+      c.module_name             AS moduleName,
+      c.cert_number             AS certNumber,
+      c.expiry_date             AS expiryDate,
+      DATEDIFF(c.expiry_date, CURDATE()) AS daysToExpiry,
+      c.status                  AS certificateStatus,
+      e.employee_name           AS employeeName,
+      e.email                   AS employeeEmail,
+      e.manager_email           AS managerEmail
+    FROM certificates c
+    JOIN employees e ON e.employee_number = c.employee_number
+    WHERE
+      ${dueClause}
+      AND c.status IN ('Compliant', 'Expiring Soon', 'Expired')
+      AND e.email IS NOT NULL
+      AND e.email <> ''
+    ORDER BY c.expiry_date ASC
+    `
+  );
+
+  const items = [];
+  for (const row of rows) {
+    const daysToExpiry = Number(row.daysToExpiry);
+    const reminderType = getReminderType(daysToExpiry, mode);
+    if (!reminderType) continue;
+
+    let alreadySent = false;
+    if (mode === 'scheduled') {
+      const [existing] = await pool.query(
+        'SELECT id, sent_at AS sentAt FROM certificate_reminders WHERE certificate_id = ? AND reminder_type = ? LIMIT 1',
+        [row.certificateId, reminderType]
+      );
+      alreadySent = existing.length > 0;
+    }
+
+    items.push({
+      certificateId: row.certificateId,
+      employeeName: row.employeeName,
+      employeeEmail: row.employeeEmail,
+      managerEmail: row.managerEmail,
+      moduleName: row.moduleName,
+      certNumber: row.certNumber,
+      expiryDate: row.expiryDate,
+      daysToExpiry,
+      certificateStatus: row.certificateStatus,
+      reminderType,
+      alreadySent,
+      sendable: mode === 'manual' ? true : !alreadySent
+    });
+  }
+
+  const byType = {
+    '90-day': items.filter((x) => x.reminderType === '90-day').length,
+    '60-day': items.filter((x) => x.reminderType === '60-day').length,
+    '30-day': items.filter((x) => x.reminderType === '30-day').length,
+    expired: items.filter((x) => x.reminderType === 'expired').length
+  };
+
+  return {
+    mode,
+    totalCandidates: items.length,
+    sendableCandidates: items.filter((x) => x.sendable).length,
+    alreadySentCandidates: items.filter((x) => x.alreadySent).length,
+    byType,
+    items
+  };
+};
+
+const sendExpiryReminders = async ({ mode = 'scheduled' } = {}) => {
   let totalSent = 0;
   const errors = [];
 
@@ -85,81 +192,106 @@ const sendExpiryReminders = async () => {
     errors.push(`Status sweep error: ${String(err)}`);
   }
 
-  // ── Step 2: Send reminder emails ──────────────────────────────────────────
-  // 0 = expires today, 30/60/90 = days until expiry
-  const thresholds = [90, 60, 30, 0];
+  // ── Step 2: Track sent reminders to avoid duplicate auto-notifications ────
+  try {
+    await ensureReminderTrackingTable();
+  } catch (err) {
+    const msg = `[Reminders] Failed to initialize certificate_reminders table: ${String(err)}`;
+    // eslint-disable-next-line no-console
+    console.error(msg);
+    errors.push(msg);
+  }
 
-  for (const days of thresholds) {
-    const isExpiredToday = days === 0;
+  // ── Step 3: Select candidate certificates and send reminders ──────────────
+  const dueClause = mode === 'scheduled'
+    ? 'DATEDIFF(c.expiry_date, CURDATE()) IN (90, 60, 30, 0)'
+    : 'DATEDIFF(c.expiry_date, CURDATE()) <= 90';
 
-    // For expiry-today, query status still Compliant/Expiring Soon just before
-    // the sweep above ran, so we re-query using expiry_date = CURDATE()
-    // and include 'Expired' status since the sweep above already flipped them.
-    const statusFilter = isExpiredToday
-      ? `c.expiry_date = CURDATE() AND c.status = 'Expired'`
-      : `c.expiry_date = DATE_ADD(CURDATE(), INTERVAL ${days} DAY) AND c.status IN ('Compliant', 'Expiring Soon')`;
+  try {
+    const [rows] = await pool.query(
+      `
+      SELECT
+        c.id                      AS certificateId,
+        c.module_name             AS moduleName,
+        c.cert_number             AS certNumber,
+        c.expiry_date             AS expiryDate,
+        DATEDIFF(c.expiry_date, CURDATE()) AS daysToExpiry,
+        e.employee_name           AS employeeName,
+        e.email                   AS employeeEmail,
+        e.manager_email           AS managerEmail
+      FROM certificates c
+      JOIN employees e ON e.employee_number = c.employee_number
+      WHERE
+        ${dueClause}
+        AND c.status IN ('Compliant', 'Expiring Soon', 'Expired')
+        AND e.email IS NOT NULL
+        AND e.email <> ''
+      ORDER BY c.expiry_date ASC
+      `
+    );
 
-    try {
-      const [rows] = await pool.query(
-        `
-        SELECT
-          c.id,
-          c.module_name        AS moduleName,
-          c.cert_number        AS certNumber,
-          c.expiry_date        AS expiryDate,
-          e.employee_name      AS employeeName,
-          e.email              AS employeeEmail,
-          e.manager_email      AS managerEmail
-        FROM certificates c
-        JOIN employees e ON e.employee_number = c.employee_number
-        WHERE
-          ${statusFilter}
-          AND e.email IS NOT NULL
-          AND e.email <> ''
-        `
-      );
+    for (const row of rows) {
+      const daysToExpiry = Number(row.daysToExpiry);
+      const reminderType = getReminderType(daysToExpiry, mode);
+      if (!reminderType) continue;
 
-      for (const row of rows) {
-        const formattedExpiry = new Date(row.expiryDate).toLocaleDateString('en-IN', {
-          day: '2-digit', month: 'long', year: 'numeric'
-        });
-
-        let subject, body;
-
-        if (isExpiredToday) {
-          subject = `🔴 Certificate Expired – Immediate Action Required`;
-          body = `Dear ${row.employeeName},\n\nThis is an automated notification from Z-PRISM (Zuari Professional Records & Information System for Management).\n\nYour certificate for the module "${row.moduleName}" (Certificate No: ${row.certNumber}) has expired today, ${formattedExpiry}.\n\nYour compliance status has been updated to EXPIRED. Please renew your certification immediately and upload the new certificate on the Z-PRISM portal to restore your compliant status.\n\nFor any assistance, please contact your HR or compliance team.\n\nRegards,\nZ-PRISM Compliance System\nZuari Finserv Ltd`;
-        } else {
-          const urgency = days <= 30 ? '🔴' : days <= 60 ? '🟠' : '🟡';
-          subject = `${urgency} Certificate Expiry Reminder – ${days} Days Remaining`;
-          body = `Dear ${row.employeeName},\n\nThis is an automated reminder from Z-PRISM (Zuari Professional Records & Information System for Management).\n\nYour certificate for the module "${row.moduleName}" (Certificate No: ${row.certNumber}) is due to expire on ${formattedExpiry} — that is ${days} days from today.\n\nPlease initiate your renewal process well in advance to avoid a lapse in compliance.\n\nRegards,\nZ-PRISM Compliance System\nZuari Finserv Ltd`;
-        }
-
-        const recipients = [row.employeeEmail];
-        if (row.managerEmail && row.managerEmail !== row.employeeEmail) {
-          recipients.push(row.managerEmail);
-        }
-
-        await mailer.sendMail({
-          from: smtpUser || 'no-reply@adventz.com',
-          to: recipients.join(','),
-          subject,
-          text: body
-        });
-
-        totalSent++;
+      if (mode === 'scheduled') {
+        const [alreadySent] = await pool.query(
+          'SELECT id FROM certificate_reminders WHERE certificate_id = ? AND reminder_type = ? LIMIT 1',
+          [row.certificateId, reminderType]
+        );
+        if (alreadySent.length > 0) continue;
       }
 
-      const label = isExpiredToday ? 'Expired today' : `${days}-day`;
-      // eslint-disable-next-line no-console
-      console.log(`[Reminders] ${label} threshold: ${rows.length} email(s) sent.`);
-    } catch (err) {
-      const label = isExpiredToday ? 'expired-today' : `${days}-day`;
-      const msg = `[Reminders] Error processing ${label} threshold: ${String(err)}`;
-      // eslint-disable-next-line no-console
-      console.error(msg);
-      errors.push(msg);
+      const formattedExpiry = new Date(row.expiryDate).toLocaleDateString('en-IN', {
+        day: '2-digit', month: 'long', year: 'numeric'
+      });
+
+      let subject;
+      let body;
+
+      if (reminderType === 'expired') {
+        const expiredDays = Math.abs(daysToExpiry);
+        const timingText = daysToExpiry === 0
+          ? `has expired today (${formattedExpiry})`
+          : `expired ${expiredDays} day(s) ago on ${formattedExpiry}`;
+
+        subject = 'Certificate Expired - Immediate Action Required';
+        body = `Dear ${row.employeeName},\n\nThis is an automated notification from Z-PRISM (Zuari Professional Records & Information System for Management).\n\nYour certificate for the module "${row.moduleName}" (Certificate No: ${row.certNumber}) ${timingText}.\n\nPlease renew your certification immediately and upload the updated document on the Z-PRISM portal.\n\nRegards,\nZ-PRISM Compliance System\nZuari Finserv Ltd`;
+      } else {
+        subject = `Certificate Expiry Reminder - ${daysToExpiry} Days Remaining`;
+        body = `Dear ${row.employeeName},\n\nThis is an automated reminder from Z-PRISM (Zuari Professional Records & Information System for Management).\n\nYour certificate for the module "${row.moduleName}" (Certificate No: ${row.certNumber}) is due to expire on ${formattedExpiry}, which is ${daysToExpiry} day(s) from today.\n\nPlease initiate your renewal process in advance to avoid a lapse in compliance.\n\nRegards,\nZ-PRISM Compliance System\nZuari Finserv Ltd`;
+      }
+
+      const recipients = [row.employeeEmail];
+      if (row.managerEmail && row.managerEmail !== row.employeeEmail) {
+        recipients.push(row.managerEmail);
+      }
+
+      await mailer.sendMail({
+        from: smtpUser || 'no-reply@adventz.com',
+        to: recipients.join(','),
+        subject,
+        text: body
+      });
+
+      if (mode === 'scheduled') {
+        await pool.query(
+          'INSERT INTO certificate_reminders (certificate_id, reminder_type) VALUES (?, ?)',
+          [row.certificateId, reminderType]
+        );
+      }
+
+      totalSent++;
     }
+
+    // eslint-disable-next-line no-console
+    console.log(`[Reminders] ${mode} run completed. ${totalSent} email(s) sent.`);
+  } catch (err) {
+    const msg = `[Reminders] Error while sending reminders in ${mode} mode: ${String(err)}`;
+    // eslint-disable-next-line no-console
+    console.error(msg);
+    errors.push(msg);
   }
 
   return { totalSent, errors };
@@ -169,7 +301,7 @@ const sendExpiryReminders = async () => {
 cron.schedule('0 9 * * *', async () => {
   // eslint-disable-next-line no-console
   console.log('[Reminders] Running scheduled expiry reminder job...');
-  await sendExpiryReminders();
+  await sendExpiryReminders({ mode: 'scheduled' });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -932,15 +1064,27 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.post('/api/admin/send-reminders', async (req, res) => {
   try {
-    const result = await sendExpiryReminders();
+    const result = await sendExpiryReminders({ mode: 'manual' });
     res.json({
       status: 'ok',
-      message: `Reminder job completed. ${result.totalSent} email(s) sent.`,
+      message: result.errors.length > 0
+        ? `Reminder job completed with errors. ${result.totalSent} email(s) sent.`
+        : `Reminder job completed. ${result.totalSent} email(s) sent.`,
       totalSent: result.totalSent,
       errors: result.errors
     });
   } catch (error) {
     res.status(500).json({ status: 'error', message: 'Failed to send reminders', error: String(error) });
+  }
+});
+
+app.get('/api/admin/reminder-preview', async (req, res) => {
+  try {
+    const mode = req.query.mode === 'scheduled' ? 'scheduled' : 'manual';
+    const data = await getReminderPreview({ mode });
+    res.json({ status: 'ok', data });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to generate reminder preview', error: String(error) });
   }
 });
 
