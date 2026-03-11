@@ -25,11 +25,12 @@ const uploadsDir = path.resolve(__dirname, 'uploads');
 const otpStore = new Map();
 const resetOtpStore = new Map();
 
-const smtpHost = process.env.SMTP_HOST || process.env.OUTLOOK_HOST || 'smtp.office365.com';
-const smtpPort = Number(process.env.SMTP_PORT || process.env.OUTLOOK_PORT || 587);
-const smtpSecure = String(process.env.SMTP_SECURE || process.env.OUTLOOK_SECURE || 'false').toLowerCase() === 'true';
-const smtpUser = process.env.SMTP_USER || process.env.OUTLOOK_USER || '';
-const smtpPass = process.env.SMTP_PASS || process.env.OUTLOOK_PASS || '';
+const envValue = (value = '') => String(value).trim().replace(/^"|"$/g, '');
+const smtpHost = 'smtpout.secureserver.net';
+const smtpPort = 587;
+const smtpSecure = false;
+const smtpUser = envValue(process.env.OUTLOOK_USER) || envValue(process.env.SMTP_USER) || '';
+const smtpPass = envValue(process.env.OUTLOOK_PASS) || envValue(process.env.SMTP_PASS) || '';
 
 const mailer = nodemailer.createTransport({
   host: smtpHost,
