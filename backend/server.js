@@ -481,6 +481,7 @@ app.get('/api/employees', async (req, res) => {
 
 app.get('/api/certificates/types', async (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store');
     const [rows] = await pool.query('SELECT name FROM certificate_types ORDER BY name ASC');
     res.json({ status: 'ok', data: rows });
   } catch (error) {
