@@ -31,6 +31,8 @@ const EmployeePortal = ({ employee, onLogout }: { employee: Employee | null; onL
   const [statusFilter, setStatusFilter] = useState<CertStatus | 'All'>('All');
   const [moduleOptions, setModuleOptions] = useState<string[]>([]);
   const [modulesError, setModulesError] = useState<string | null>(null);
+  const [selectedModule, setSelectedModule] = useState('');
+  const [customModuleName, setCustomModuleName] = useState('');
   const [selectedFileName, setSelectedFileName] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -124,6 +126,15 @@ const EmployeePortal = ({ employee, onLogout }: { employee: Employee | null; onL
     e.preventDefault();
     if (!currentEmployee?.employeeNumber) return;
     const formData = new FormData(e.currentTarget);
+    // If "Others" was chosen, replace the moduleName with the custom text
+    if (selectedModule === '__others__') {
+      const trimmed = customModuleName.trim();
+      if (!trimmed) {
+        setToast({ message: 'Please specify the certificate type.', type: 'error' });
+        return;
+      }
+      formData.set('moduleName', trimmed);
+    }
     formData.append('employeeNumber', currentEmployee.employeeNumber);
     try {
       const res = await fetch('/api/certificates', { method: 'POST', body: formData });
@@ -131,6 +142,8 @@ const EmployeePortal = ({ employee, onLogout }: { employee: Employee | null; onL
       if (!res.ok) throw new Error(payload?.message || 'Upload failed');
       await loadCertificates();
       setSelectedFileName('');
+      setSelectedModule('');
+      setCustomModuleName('');
       if (fileInputRef.current) fileInputRef.current.value = '';
       setView('dashboard');
       setToast({ message: 'Certificate submitted for review.', type: 'success' });
@@ -453,14 +466,29 @@ const EmployeePortal = ({ employee, onLogout }: { employee: Employee | null; onL
                     <form onSubmit={handleUpload} className="space-y-6 relative z-10">
                       <div>
                         <label className="block text-sm font-bold text-slate-700 mb-2">Type of the Certificate</label>
-                        <select name="moduleName" required className={`${inputBaseClass} w-full`}>
+                        <select
+                          name="moduleName"
+                          required
+                          value={selectedModule}
+                          onChange={(e) => { setSelectedModule(e.target.value); setCustomModuleName(''); }}
+                          className={`${inputBaseClass} w-full`}
+                        >
                           <option value="">Select Module</option>
                           {moduleOptions.map((name) => (
-                            <option key={name} value={name}>
-                              {name}
-                            </option>
+                            <option key={name} value={name}>{name}</option>
                           ))}
+                          <option value="__others__">Others (specify below)</option>
                         </select>
+                        {selectedModule === '__others__' && (
+                          <input
+                            type="text"
+                            required
+                            value={customModuleName}
+                            onChange={(e) => setCustomModuleName(e.target.value)}
+                            placeholder="Enter certificate / exam name"
+                            className={`${inputBaseClass} w-full mt-3`}
+                          />
+                        )}
                         {modulesError && <p className="text-xs text-rose-500 mt-2">{modulesError}</p>}
                       </div>
                       <div>
