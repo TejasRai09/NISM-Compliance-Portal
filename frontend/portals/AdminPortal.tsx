@@ -59,6 +59,7 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | undefined>(undefined);
+  const [mandatoryCountByEmployee, setMandatoryCountByEmployee] = useState<Record<string, number>>({});
 
   const [isSendingReminders, setIsSendingReminders] = useState(false);
   const [reminderToast, setReminderToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -90,7 +91,21 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
       const res = await fetch('/api/employees');
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.message || 'Failed to load employees');
-      setEmployees(payload.data || []);
+      const empList: Employee[] = payload.data || [];
+      setEmployees(empList);
+      const counts: Record<string, number> = {};
+      await Promise.all(
+        empList.map(async (emp) => {
+          try {
+            const r = await fetch(`/api/employees/${encodeURIComponent(emp.employeeNumber)}/mandatory-certificates`);
+            const p = await r.json();
+            counts[emp.employeeNumber] = (p.data || []).length;
+          } catch {
+            counts[emp.employeeNumber] = 0;
+          }
+        })
+      );
+      setMandatoryCountByEmployee(counts);
     } catch (error) {
       setEmployeesError(String(error));
       setEmployees([]);
@@ -269,6 +284,7 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
 
   const inputBaseClass =
     'bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-900 focus:ring-2 ring-indigo-100 focus:bg-white focus:border-indigo-300 transition-all outline-none placeholder:text-slate-400 shadow-sm';
+  const formatDisplayDate = (value?: string) => (value ? new Date(value).toLocaleDateString() : '—');
 
   return (
     <div className="min-h-screen bg-slate-50 flex">
@@ -516,7 +532,8 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
                       <tr>
                         <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Employee</th>
                         <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Department</th>
-                        <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Valid Certificates</th>
+                        <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Valid Certs</th>
+                        <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Mandatory</th>
                         <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center">Actions</th>
                       </tr>
                     </thead>
@@ -541,6 +558,15 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
                           <td className="px-6 py-4">
                             <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border text-emerald-600 bg-emerald-50 border-emerald-100">
                               {(validCertificateCountByEmployee[emp.employeeNumber] ?? 0).toString()}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border ${
+                              (mandatoryCountByEmployee[emp.employeeNumber] ?? 0) > 0
+                                ? 'text-indigo-600 bg-indigo-50 border-indigo-100'
+                                : 'text-slate-400 bg-slate-50 border-slate-100'
+                            }`}>
+                              {(mandatoryCountByEmployee[emp.employeeNumber] ?? 0).toString()} required
                             </span>
                           </td>
                           <td className="px-6 py-4">
@@ -762,10 +788,16 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
                           </div>
                           <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
                             <p className="text-slate-400 font-bold uppercase tracking-wider">
-                              Employee: <span className="text-slate-800">{rev.employeeName} ({rev.employeeId})</span>
+                              Employee: <span className="text-slate-800">{rev.employeeName} ({rev.employeeNumber || '—'})</span>
                             </p>
                             <p className="text-slate-400 font-bold uppercase tracking-wider">
                               Cert #: <span className="text-slate-800">{rev.certNumber}</span>
+                            </p>
+                            <p className="text-slate-400 font-bold uppercase tracking-wider">
+                              Issue Date: <span className="text-slate-800">{formatDisplayDate(rev.issueDate)}</span>
+                            </p>
+                            <p className="text-slate-400 font-bold uppercase tracking-wider">
+                              Expiry Date: <span className="text-slate-800">{formatDisplayDate(rev.expiryDate)}</span>
                             </p>
                           </div>
                         </div>

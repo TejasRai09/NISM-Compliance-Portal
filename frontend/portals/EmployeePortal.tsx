@@ -17,7 +17,7 @@ import {
   UserCircle2,
   XCircle
 } from 'lucide-react';
-import type { ActiveView, Certificate, CertStatus, Employee } from '../types';
+import type { ActiveView, Certificate, CertStatus, Employee, MandatoryCertStatus } from '../types';
 import { INITIAL_CERTS, LOGO_URL } from '../data';
 import { getStatusColor } from '../utils';
 import BackgroundDecoration from '../components/BackgroundDecoration';
@@ -35,6 +35,7 @@ const EmployeePortal = ({ employee, onLogout }: { employee: Employee | null; onL
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [certificatePage, setCertificatePage] = useState(1);
+  const [mandatoryStatus, setMandatoryStatus] = useState<MandatoryCertStatus[]>([]);
 
   const currentEmployee = employee;
 
@@ -103,8 +104,20 @@ const EmployeePortal = ({ employee, onLogout }: { employee: Employee | null; onL
     }
   };
 
+  const loadMandatoryStatus = async () => {
+    if (!currentEmployee?.employeeNumber) return;
+    try {
+      const res = await fetch(`/api/employees/${encodeURIComponent(currentEmployee.employeeNumber)}/mandatory-status`);
+      const payload = await res.json();
+      if (res.ok) setMandatoryStatus(payload.data || []);
+    } catch {
+      setMandatoryStatus([]);
+    }
+  };
+
   useEffect(() => {
     loadCertificates();
+    loadMandatoryStatus();
   }, [currentEmployee?.employeeNumber]);
 
   const handleUpload = async (e: FormEvent<HTMLFormElement>) => {
@@ -243,6 +256,82 @@ const EmployeePortal = ({ employee, onLogout }: { employee: Employee | null; onL
                     onClick={() => setStatusFilter('Expired')}
                   />
                 </div>
+
+                {mandatoryStatus.length > 0 && (
+                  <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
+                    <div className="p-6 border-b border-slate-50">
+                      <h2 className="text-xl font-bold text-slate-800">Mandatory Certificates</h2>
+                      <p className="text-xs text-slate-400 mt-1 font-medium">
+                        Required by your organization — {mandatoryStatus.filter((m) => m.status === 'Not Uploaded' || m.status === 'Rejected').length} pending action
+                      </p>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left">
+                        <thead className="bg-slate-50/50">
+                          <tr>
+                            <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Certificate Type</th>
+                            <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Cert Number</th>
+                            <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Expiry Date</th>
+                            <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Status</th>
+                            <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                          {mandatoryStatus.map((item) => {
+                            const isNotUploaded = item.status === 'Not Uploaded';
+                            const isRejected = item.status === 'Rejected';
+                            const statusStyle = isNotUploaded
+                              ? 'text-rose-600 bg-rose-50 border-rose-100'
+                              : isRejected
+                              ? 'text-slate-600 bg-slate-50 border-slate-200'
+                              : item.status === 'Compliant'
+                              ? 'text-emerald-600 bg-emerald-50 border-emerald-100'
+                              : item.status === 'Expiring Soon'
+                              ? 'text-amber-600 bg-amber-50 border-amber-100'
+                              : item.status === 'Expired'
+                              ? 'text-rose-600 bg-rose-50 border-rose-100'
+                              : 'text-blue-600 bg-blue-50 border-blue-100';
+                            return (
+                              <tr key={item.certificateType} className={`transition-colors ${isNotUploaded || isRejected ? 'bg-rose-50/20' : 'hover:bg-slate-50/50'}`}>
+                                <td className="px-6 py-4">
+                                  <p className="text-sm font-bold text-slate-700 leading-snug">{item.certificateType}</p>
+                                </td>
+                                <td className="px-6 py-4 text-xs font-medium text-slate-500">{item.certNumber || '—'}</td>
+                                <td className="px-6 py-4 text-sm font-medium text-slate-600">
+                                  {item.expiryDate ? new Date(item.expiryDate).toLocaleDateString() : '—'}
+                                </td>
+                                <td className="px-6 py-4">
+                                  <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border ${statusStyle}`}>
+                                    {item.status}
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4 text-center">
+                                  {(isNotUploaded || isRejected) ? (
+                                    <button
+                                      onClick={() => setView('upload')}
+                                      className="px-4 py-1.5 bg-blue-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-blue-700 transition-all shadow-sm"
+                                    >
+                                      Upload
+                                    </button>
+                                  ) : item.filePath ? (
+                                    <button
+                                      onClick={() => window.open(item.filePath!, '_blank')}
+                                      className="p-2 text-indigo-600 bg-indigo-50 hover:bg-indigo-600 hover:text-white rounded-xl transition-all shadow-sm"
+                                    >
+                                      <Download size={16} />
+                                    </button>
+                                  ) : (
+                                    <span className="text-xs text-slate-300">—</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
 
                 <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden">
                   <div className="p-6 border-b border-slate-50 flex flex-col xl:flex-row xl:items-center justify-between gap-6">

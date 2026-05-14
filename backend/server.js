@@ -25,6 +25,52 @@ const uploadsDir = path.resolve(__dirname, 'uploads');
 const otpStore = new Map();
 const resetOtpStore = new Map();
 
+const ALL_CERT_TYPES = [
+  'NISM-Series-I: Currency Derivatives',
+  'NISM-Series-II-A: Registrars to an Issue and Share Transfer Agents - Corporate',
+  'NISM-Series-II-B: Registrars to an Issue and Share Transfer Agents - Mutual Fund',
+  'NISM-Series-III-A: Securities Intermediaries Compliance (Non-Fund)',
+  'NISM-Series-III-C: Securities Intermediaries Compliance (Fund)',
+  'NISM-Series-IV: Interest Rate Derivatives',
+  'NISM-Series-V-A: Mutual Fund Distributors (English)',
+  'NISM-Series-V-A: Mutual Fund Distributors (Hindi)',
+  'NISM-Series-V-B: Mutual Fund Foundation',
+  'NISM-Series-VI: Depository Operations',
+  'NISM-Series-VII: Securities Operations and Risk Management',
+  'NISM-Series-VIII: Equity Derivatives',
+  'NISM-Series-IX: Merchant Banking',
+  'NISM-Series-X-A: Investment Adviser (Level 1)',
+  'NISM-Series-X-B: Investment Adviser (Level 2)',
+  'NISM-Series-X-C: Investment Adviser Certification (Renewal)',
+  'NISM-Series-XIII: Common Derivatives',
+  'NISM-Series-XV: Research Analyst',
+  'NISM-Series-XV-B: Research Analyst Certification (Renewal)',
+  'NISM-Series-XVI: Commodity Derivatives',
+  'NISM-Series-XIX-C: Alternative Investment Fund Managers',
+  'NISM-Series-XIX-D: Category I and II Alternative Investment Fund Managers',
+  'NISM-Series-XIX-E: Category III Alternative Investment Fund Managers',
+  'NISM-Series-XXI-A: Portfolio Management Services (PMS) Distributors',
+  'NISM-Series-XXI-B: Portfolio Managers',
+  'NISM-Series-XVII: Retirement Adviser',
+  'NISM-Series-XII: Securities Markets Foundation',
+  'NISM-Series-XIX-A: Alternative Investment Funds (Category I and II) Distributors',
+  'NISM-Series-XIX-B: Alternative Investment Funds (Category III) Distributors',
+  'NISM-Series-XXIII: Social Impact Assessors',
+  'NISM-Series-XXIV: AML and CFT Provisions in Securities Markets',
+  'SEBI Investor Awareness Test (Available in English, Hindi, Marathi, Telugu,Bengali)',
+  'IBBI: Valuation Examination in the Asset class: Land and Building',
+  'IBBI: Valuation Examination in the Asset class: Plant and Machinery',
+  'IBBI: Valuation Examination in the Asset class: Securities or Financial Assets',
+  'IRDAI Individual Insurance Agent Certificate',
+  'IRDAI Corporate Agent License',
+  'IRDAI Insurance Broker License',
+  'IRDAI Insurance Surveyor & Loss Assessor License',
+  'IRDAI Third Party Administrator (TPA) License',
+  'IRDAI Point of Sales Person (POSP) Certificate',
+  'IRDAI Web Aggregator License',
+  'IRDAI Appointed Person / Specified Person Certificate'
+];
+
 const envValue = (value = '') => String(value).trim().replace(/^"|"$/g, '');
 const smtpHost = 'smtpout.secureserver.net';
 const smtpPort = 587;
@@ -92,6 +138,28 @@ const ensureReminderTrackingTable = async () => {
       UNIQUE KEY uniq_cert_reminder (certificate_id, reminder_type)
     )
   `);
+};
+
+const ensureMandatoryTables = async () => {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS certificate_types (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      UNIQUE KEY uniq_name (name)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS employee_mandatory_certificates (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      employee_number VARCHAR(50) NOT NULL,
+      certificate_type VARCHAR(255) NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uniq_emp_cert (employee_number, certificate_type)
+    )
+  `);
+  for (const name of ALL_CERT_TYPES) {
+    await pool.query('INSERT IGNORE INTO certificate_types (name) VALUES (?)', [name]);
+  }
 };
 
 const getReminderPreview = async ({ mode = 'scheduled' } = {}) => {
@@ -290,6 +358,56 @@ const sendExpiryReminders = async ({ mode = 'scheduled' } = {}) => {
     console.log(`[Reminders] ${mode} run completed. ${totalSent} email(s) sent.`);
   } catch (err) {
     const msg = `[Reminders] Error while sending reminders in ${mode} mode: ${String(err)}`;
+    // eslint-disable-next-line no-console
+    console.error(msg);
+    errors.push(msg);
+  }
+
+  // ── Step 4: Notify employees who have not uploaded mandatory certificates ──
+  try {
+    const [missingRows] = await pool.query(`
+      SELECT
+        emc.employee_number       AS employeeNumber,
+        e.employee_name           AS employeeName,
+        e.email                   AS employeeEmail,
+        e.manager_email           AS managerEmail,
+        GROUP_CONCAT(emc.certificate_type ORDER BY emc.certificate_type SEPARATOR '||') AS missingCerts
+      FROM employee_mandatory_certificates emc
+      JOIN employees e ON e.employee_number = emc.employee_number
+      WHERE NOT EXISTS (
+        SELECT 1 FROM certificates c
+        WHERE c.employee_number = emc.employee_number
+          AND c.module_name = emc.certificate_type
+          AND c.status IN ('Compliant', 'Expiring Soon', 'Pending Approval')
+      )
+      AND e.email IS NOT NULL AND e.email <> ''
+      GROUP BY emc.employee_number, e.employee_name, e.email, e.manager_email
+    `);
+
+    for (const row of missingRows) {
+      const certList = row.missingCerts.split('||').map((c, i) => `  ${i + 1}. ${c}`).join('\n');
+      const subject = 'Action Required: Mandatory Certificate(s) Not Uploaded';
+      const body = `Dear ${row.employeeName},\n\nThis is an automated notification from Z-PRISM (Zuari Professional Records & Information System for Management).\n\nThe following mandatory certificate(s) have not been uploaded on the portal:\n\n${certList}\n\nPlease complete the required certification(s) and upload the documents on the Z-PRISM portal at your earliest convenience.\n\nRegards,\nZ-PRISM Compliance System\nZuari Finserv Ltd`;
+
+      const recipients = [row.employeeEmail];
+      if (row.managerEmail && row.managerEmail !== row.employeeEmail) {
+        recipients.push(row.managerEmail);
+      }
+
+      await mailer.sendMail({
+        from: smtpUser || 'no-reply@adventz.com',
+        to: recipients.join(','),
+        subject,
+        text: body
+      });
+
+      totalSent++;
+    }
+
+    // eslint-disable-next-line no-console
+    console.log(`[Reminders] Missing mandatory cert notifications: ${missingRows.length} employee(s) notified.`);
+  } catch (err) {
+    const msg = `[Reminders] Error sending missing mandatory cert notifications: ${String(err)}`;
     // eslint-disable-next-line no-console
     console.error(msg);
     errors.push(msg);
@@ -706,7 +824,8 @@ app.post('/api/employees', async (req, res) => {
       phone,
       managerEmail,
       managerEmployeeNo,
-      managerName
+      managerName,
+      mandatoryCertificates
     } = req.body || {};
 
     if (!employeeNumber || !name) {
@@ -734,6 +853,15 @@ app.post('/api/employees', async (req, res) => {
       ]
     );
 
+    if (Array.isArray(mandatoryCertificates) && mandatoryCertificates.length > 0) {
+      for (const certType of mandatoryCertificates) {
+        await pool.query(
+          'INSERT IGNORE INTO employee_mandatory_certificates (employee_number, certificate_type) VALUES (?, ?)',
+          [employeeNumber, certType]
+        );
+      }
+    }
+
     res.status(201).json({ status: 'ok' });
   } catch (error) {
     res.status(500).json({ status: 'error', message: 'Failed to create employee', error: String(error) });
@@ -752,7 +880,8 @@ app.put('/api/employees/:employeeNumber', async (req, res) => {
       phone,
       managerEmail,
       managerEmployeeNo,
-      managerName
+      managerName,
+      mandatoryCertificates
     } = req.body || {};
 
     if (!employeeNumber || !name) {
@@ -792,6 +921,16 @@ app.put('/api/employees/:employeeNumber', async (req, res) => {
       return res.status(404).json({ status: 'error', message: 'Employee not found.' });
     }
 
+    if (Array.isArray(mandatoryCertificates)) {
+      await pool.query('DELETE FROM employee_mandatory_certificates WHERE employee_number = ?', [employeeNumber]);
+      for (const certType of mandatoryCertificates) {
+        await pool.query(
+          'INSERT IGNORE INTO employee_mandatory_certificates (employee_number, certificate_type) VALUES (?, ?)',
+          [employeeNumber, certType]
+        );
+      }
+    }
+
     res.json({ status: 'ok' });
   } catch (error) {
     res.status(500).json({ status: 'error', message: 'Failed to update employee', error: String(error) });
@@ -801,6 +940,7 @@ app.put('/api/employees/:employeeNumber', async (req, res) => {
 app.delete('/api/employees/:employeeNumber', async (req, res) => {
   try {
     const { employeeNumber } = req.params;
+    await pool.query('DELETE FROM employee_mandatory_certificates WHERE employee_number = ?', [employeeNumber]);
     const [result] = await pool.query('DELETE FROM employees WHERE employee_number = ?', [employeeNumber]);
 
     if (result.affectedRows === 0) {
@@ -1089,6 +1229,61 @@ app.get('/api/admin/reminder-preview', async (req, res) => {
   }
 });
 
+app.get('/api/employees/:employeeNumber/mandatory-certificates', async (req, res) => {
+  try {
+    const { employeeNumber } = req.params;
+    const [rows] = await pool.query(
+      'SELECT certificate_type AS certificateType FROM employee_mandatory_certificates WHERE employee_number = ? ORDER BY certificate_type ASC',
+      [employeeNumber]
+    );
+    res.json({ status: 'ok', data: rows.map((r) => r.certificateType) });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to load mandatory certificates', error: String(error) });
+  }
+});
+
+app.get('/api/employees/:employeeNumber/mandatory-status', async (req, res) => {
+  try {
+    const { employeeNumber } = req.params;
+    const [rows] = await pool.query(
+      `
+      SELECT
+        emc.certificate_type AS certificateType,
+        c.id,
+        c.cert_number       AS certNumber,
+        c.issue_date        AS issueDate,
+        c.expiry_date       AS expiryDate,
+        c.status,
+        c.file_path         AS filePath
+      FROM employee_mandatory_certificates emc
+      LEFT JOIN certificates c ON c.id = (
+        SELECT id FROM certificates
+        WHERE employee_number = emc.employee_number
+          AND module_name = emc.certificate_type
+          AND status NOT IN ('Rejected')
+        ORDER BY created_at DESC
+        LIMIT 1
+      )
+      WHERE emc.employee_number = ?
+      ORDER BY emc.certificate_type ASC
+      `,
+      [employeeNumber]
+    );
+    const data = rows.map((row) => ({
+      certificateType: row.certificateType,
+      id: row.id || null,
+      certNumber: row.certNumber || null,
+      issueDate: row.issueDate || null,
+      expiryDate: row.expiryDate || null,
+      status: row.status || 'Not Uploaded',
+      filePath: row.filePath || null
+    }));
+    res.json({ status: 'ok', data });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to load mandatory cert status', error: String(error) });
+  }
+});
+
 app.use((req, res) => {
   res.sendFile(path.join(frontendDist, 'index.html'));
 });
@@ -1106,6 +1301,8 @@ const getLocalIp = () => {
 };
 
 const startServer = (port) => {
+  ensureMandatoryTables().catch((err) => console.error('[Startup] ensureMandatoryTables failed:', String(err)));
+
   const server = app.listen(port, HOST, () => {
     // eslint-disable-next-line no-console
     const ip = getLocalIp();

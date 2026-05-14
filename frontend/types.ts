@@ -27,4 +27,15 @@ export interface Employee {
   managerEmail: string;
   managerEmployeeNo: string;
   managerName: string;
+  mandatoryCertificates?: string[];
+}
+
+export interface MandatoryCertStatus {
+  certificateType: string;
+  id: string | null;
+  certNumber: string | null;
+  issueDate: string | null;
+  expiryDate: string | null;
+  status: CertStatus | 'Not Uploaded';
+  filePath: string | null;
 }
