@@ -573,34 +573,63 @@ app.get('/api/admin/stats', async (req, res) => {
     const [[{ pendingReviews }]] = await pool.query(
       "SELECT COUNT(*) AS pendingReviews FROM certificates WHERE status = 'Pending Approval'"
     );
-    const [[{ criticalExpirations }]] = await pool.query(
-      "SELECT COUNT(*) AS criticalExpirations FROM certificates WHERE expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY) AND status IN ('Compliant','Expiring Soon')"
+
+    // Critical expirations: mandatory certs expiring in next 30 days
+    const [[{ criticalExpirations }]] = await pool.query(`
+      SELECT COUNT(*) AS criticalExpirations
+      FROM certificates c
+      JOIN employee_mandatory_certificates emc
+        ON emc.employee_number = c.employee_number AND emc.certificate_type = c.module_name
+      WHERE c.expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
+        AND c.status IN ('Compliant','Expiring Soon')
+    `);
+
+    // Compliance based on mandatory certs: employees who have ALL their mandatory certs done
+    const [[{ totalWithMandatory }]] = await pool.query(
+      'SELECT COUNT(DISTINCT employee_number) AS totalWithMandatory FROM employee_mandatory_certificates'
     );
 
-    const [[{ compliantEmployees }]] = await pool.query(
-      `
-      SELECT COUNT(DISTINCT employee_number) AS compliantEmployees
-      FROM certificates
-      WHERE status = 'Compliant'
-      `
-    );
+    const [[{ fullCompliant }]] = await pool.query(`
+      SELECT COUNT(*) AS fullCompliant FROM (
+        SELECT emc.employee_number
+        FROM employee_mandatory_certificates emc
+        GROUP BY emc.employee_number
+        HAVING SUM(
+          CASE WHEN EXISTS (
+            SELECT 1 FROM certificates c
+            WHERE c.employee_number = emc.employee_number
+              AND c.module_name = emc.certificate_type
+              AND c.status IN ('Compliant', 'Expiring Soon')
+          ) THEN 0 ELSE 1 END
+        ) = 0
+      ) AS t
+    `);
 
-    const [deptRows] = await pool.query(
-      `
-      SELECT e.department,
-             COUNT(DISTINCT CASE WHEN c.status = 'Compliant' THEN e.employee_number END) AS compliantEmployees,
-             COUNT(DISTINCT e.employee_number) AS totalEmployees
+    const complianceRate = Number(totalWithMandatory)
+      ? `${Math.round((Number(fullCompliant) / Number(totalWithMandatory)) * 100)}%`
+      : '—';
+
+    // Department compliance based on mandatory certs
+    const [deptRows] = await pool.query(`
+      SELECT
+        e.department,
+        COUNT(DISTINCT e.employee_number) AS totalEmployees,
+        SUM(CASE WHEN NOT EXISTS (
+          SELECT 1 FROM employee_mandatory_certificates emc2
+          WHERE emc2.employee_number = e.employee_number
+            AND NOT EXISTS (
+              SELECT 1 FROM certificates c
+              WHERE c.employee_number = emc2.employee_number
+                AND c.module_name = emc2.certificate_type
+                AND c.status IN ('Compliant', 'Expiring Soon')
+            )
+        ) THEN 1 ELSE 0 END) AS compliantEmployees
       FROM employees e
-      LEFT JOIN certificates c ON c.employee_number = e.employee_number
       WHERE e.department IS NOT NULL AND e.department <> ''
+        AND EXISTS (SELECT 1 FROM employee_mandatory_certificates WHERE employee_number = e.employee_number)
       GROUP BY e.department
       ORDER BY e.department ASC
-      `
-    );
-
-    const complianceRate = totalEmployees
-      ? `${Math.round((Number(compliantEmployees || 0) / Number(totalEmployees)) * 100)}%`
-      : '—';
+    `);
 
     const departmentCompliance = deptRows
       .filter((row) => row.department)
@@ -1226,6 +1255,101 @@ app.get('/api/admin/reminder-preview', async (req, res) => {
     res.json({ status: 'ok', data });
   } catch (error) {
     res.status(500).json({ status: 'error', message: 'Failed to generate reminder preview', error: String(error) });
+  }
+});
+
+app.get('/api/admin/compliance-matrix', async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT
+        e.employee_number   AS employeeNumber,
+        e.employee_name     AS employeeName,
+        e.department,
+        e.email,
+        e.manager_email     AS managerEmail,
+        emc.certificate_type AS certificateType,
+        COALESCE(c.status, 'Not Uploaded') AS certStatus
+      FROM employees e
+      JOIN employee_mandatory_certificates emc ON emc.employee_number = e.employee_number
+      LEFT JOIN certificates c ON c.id = (
+        SELECT id FROM certificates
+        WHERE employee_number = emc.employee_number
+          AND module_name = emc.certificate_type
+          AND status NOT IN ('Rejected')
+        ORDER BY created_at DESC
+        LIMIT 1
+      )
+      ORDER BY e.employee_name ASC, emc.certificate_type ASC
+    `);
+
+    const map = new Map();
+    for (const row of rows) {
+      if (!map.has(row.employeeNumber)) {
+        map.set(row.employeeNumber, {
+          employeeNumber: row.employeeNumber,
+          employeeName: row.employeeName,
+          department: row.department,
+          email: row.email,
+          managerEmail: row.managerEmail,
+          certs: []
+        });
+      }
+      map.get(row.employeeNumber).certs.push({
+        certType: row.certificateType,
+        status: row.certStatus
+      });
+    }
+
+    res.json({ status: 'ok', data: Array.from(map.values()) });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to load compliance matrix', error: String(error) });
+  }
+});
+
+app.post('/api/admin/send-reminder/:employeeNumber', async (req, res) => {
+  try {
+    const { employeeNumber } = req.params;
+
+    const [rows] = await pool.query(`
+      SELECT
+        e.employee_name AS employeeName,
+        e.email         AS employeeEmail,
+        e.manager_email AS managerEmail,
+        GROUP_CONCAT(emc.certificate_type ORDER BY emc.certificate_type SEPARATOR '||') AS missingCerts
+      FROM employee_mandatory_certificates emc
+      JOIN employees e ON e.employee_number = emc.employee_number
+      WHERE emc.employee_number = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM certificates c
+          WHERE c.employee_number = emc.employee_number
+            AND c.module_name = emc.certificate_type
+            AND c.status IN ('Compliant', 'Expiring Soon', 'Pending Approval')
+        )
+      GROUP BY e.employee_name, e.email, e.manager_email
+    `, [employeeNumber]);
+
+    if (rows.length === 0) {
+      return res.json({ status: 'ok', message: 'No missing mandatory certificates for this employee.' });
+    }
+
+    const row = rows[0];
+    const certList = row.missingCerts.split('||').map((c, i) => `  ${i + 1}. ${c}`).join('\n');
+    const subject = 'Action Required: Mandatory Certificate(s) Not Uploaded';
+    const body = `Dear ${row.employeeName},\n\nThis is a reminder from Z-PRISM (Zuari Professional Records & Information System for Management).\n\nThe following mandatory certificate(s) have not been uploaded on the portal:\n\n${certList}\n\nPlease complete the required certification(s) and upload the documents on the Z-PRISM portal at your earliest convenience.\n\nRegards,\nZ-PRISM Compliance System\nZuari Finserv Ltd`;
+
+    const recipients = [row.employeeEmail];
+    if (row.managerEmail && row.managerEmail !== row.employeeEmail) recipients.push(row.managerEmail);
+
+    await mailer.sendMail({
+      from: smtpUser || 'no-reply@adventz.com',
+      to: recipients.join(','),
+      subject,
+      text: body
+    });
+
+    res.json({ status: 'ok', message: `Reminder sent to ${row.employeeName}.` });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to send reminder', error: String(error) });
   }
 });
 

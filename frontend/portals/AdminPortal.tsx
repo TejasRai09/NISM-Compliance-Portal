@@ -4,6 +4,7 @@ import {
   BarChart3,
   Bell,
   CheckCircle,
+  CheckCircle2,
   ClipboardList,
   Clock,
   Download,
@@ -14,13 +15,16 @@ import {
   LogOut,
   Plus,
   Search,
+  Send,
   ShieldAlert,
   ShieldCheck,
+  TableProperties,
   ThumbsDown,
   ThumbsUp,
   Trash2,
   User,
-  Users
+  Users,
+  XCircle
 } from 'lucide-react';
 import type { ActiveView, Certificate, CertStatus, Employee } from '../types';
 import { LOGO_URL, MOCK_EMPLOYEES, PENDING_REVIEWS } from '../data';
@@ -64,6 +68,18 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
   const [isSendingReminders, setIsSendingReminders] = useState(false);
   const [reminderToast, setReminderToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
+  const [complianceMatrix, setComplianceMatrix] = useState<{
+    employeeNumber: string;
+    employeeName: string;
+    department: string;
+    email: string;
+    certs: { certType: string; status: string }[];
+  }[]>([]);
+  const [complianceMatrixError, setComplianceMatrixError] = useState<string | null>(null);
+  const [complianceSearch, setComplianceSearch] = useState('');
+  const [complianceDeptFilter, setComplianceDeptFilter] = useState('All');
+  const [sendingReminderFor, setSendingReminderFor] = useState<string | null>(null);
+
   const handleSendReminders = async () => {
     setIsSendingReminders(true);
     setReminderToast(null);
@@ -82,6 +98,34 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
 
   const handleDownloadMasterReport = () => {
     window.open('/api/admin/master-report', '_blank');
+  };
+
+  const loadComplianceMatrix = async () => {
+    setComplianceMatrixError(null);
+    try {
+      const res = await fetch('/api/admin/compliance-matrix');
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.message || 'Failed to load compliance matrix');
+      setComplianceMatrix(payload.data || []);
+    } catch (error) {
+      setComplianceMatrixError(String(error));
+      setComplianceMatrix([]);
+    }
+  };
+
+  const handleSendIndividualReminder = async (employeeNumber: string) => {
+    setSendingReminderFor(employeeNumber);
+    try {
+      const res = await fetch(`/api/admin/send-reminder/${encodeURIComponent(employeeNumber)}`, { method: 'POST' });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.message || 'Failed to send reminder');
+      setReminderToast({ message: payload.message, type: 'success' });
+    } catch (error) {
+      setReminderToast({ message: String(error), type: 'error' });
+    } finally {
+      setSendingReminderFor(null);
+      setTimeout(() => setReminderToast(null), 4000);
+    }
   };
 
   const loadEmployees = async () => {
@@ -149,6 +193,7 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
     loadReviewQueue();
     loadAdminStats();
     loadModuleStats();
+    loadComplianceMatrix();
   }, []);
 
   const filteredCertificates = useMemo(() => {
@@ -335,6 +380,15 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
             </div>
             <span>Review Queue</span>
           </button>
+          <button
+            onClick={() => setView('compliance')}
+            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all ${
+              view === 'compliance' ? 'bg-indigo-50 text-indigo-600 font-bold' : 'text-slate-500 hover:bg-slate-50'
+            }`}
+          >
+            <TableProperties size={20} />
+            <span>Compliance Matrix</span>
+          </button>
         </nav>
         <div className="p-6 border-t border-slate-50">
           <button
@@ -361,7 +415,9 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
                       ? 'Certificates Repository'
                       : view === 'review'
                         ? 'Verification Queue'
-                        : 'Admin Profile'}
+                        : view === 'compliance'
+                          ? 'Compliance Matrix'
+                          : 'Admin Profile'}
               </h1>
               <p className="text-slate-500 mt-1 font-medium tracking-tight">Managing compliance for Zuari Finserv Ltd</p>
             </div>
@@ -414,6 +470,16 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
                 className="bg-emerald-600 text-white px-6 py-4 rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-emerald-100 hover:bg-emerald-700 transition-all flex items-center space-x-2">
                 <Download size={18} />
                 <span>Download Master Report</span>
+              </button>
+            )}
+            {view === 'compliance' && (
+              <button
+                onClick={handleSendReminders}
+                disabled={isSendingReminders}
+                className="flex items-center space-x-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white px-6 py-4 rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-amber-100 transition-all"
+              >
+                <Send size={16} />
+                <span>{isSendingReminders ? 'Sending...' : 'Send All Reminders'}</span>
               </button>
             )}
           </header>
@@ -829,6 +895,165 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
                     </motion.div>
                   ))
                 )}
+              </motion.div>
+            )}
+
+            {view === 'compliance' && (
+              <motion.div key="admin-compliance" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+                {/* Filters */}
+                <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm p-6 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+                  <div className="flex flex-col md:flex-row gap-4 flex-1">
+                    <div className="relative w-full md:w-72">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                      <input
+                        type="text"
+                        placeholder="Search employee..."
+                        value={complianceSearch}
+                        onChange={(e) => setComplianceSearch(e.target.value)}
+                        className={`${inputBaseClass} pl-10 w-full`}
+                      />
+                    </div>
+                    <select
+                      value={complianceDeptFilter}
+                      onChange={(e) => setComplianceDeptFilter(e.target.value)}
+                      className={`${inputBaseClass} w-full md:w-56 cursor-pointer font-medium text-slate-600`}
+                    >
+                      <option value="All">All Departments</option>
+                      <option value="Trading">Trading</option>
+                      <option value="Customer Care">Customer Care</option>
+                      <option value="Back Office - Trading">Back Office - Trading</option>
+                      <option value="Human Resource">Human Resource</option>
+                      <option value="Back Office - DP & MF">Back Office - DP & MF</option>
+                      <option value="IT">IT</option>
+                      <option value="Programmer">Programmer</option>
+                      <option value="Product">Product</option>
+                      <option value="Accounts">Accounts</option>
+                      <option value="RMS - Equity">RMS - Equity</option>
+                      <option value="RMS - Commodity">RMS - Commodity</option>
+                      <option value="Management">Management</option>
+                      <option value="Secretarial">Secretarial</option>
+                    </select>
+                  </div>
+                  {/* Legend */}
+                  <div className="flex items-center gap-5 text-[10px] font-bold uppercase tracking-wider text-slate-500 flex-shrink-0">
+                    <span className="flex items-center gap-1.5"><CheckCircle2 size={14} className="text-emerald-500" /> Done</span>
+                    <span className="flex items-center gap-1.5"><Clock size={14} className="text-blue-500" /> Pending</span>
+                    <span className="flex items-center gap-1.5"><XCircle size={14} className="text-rose-500" /> Missing</span>
+                  </div>
+                </div>
+
+                {complianceMatrixError && (
+                  <div className="py-6 text-center text-rose-500 bg-white rounded-2xl border border-slate-100">{complianceMatrixError}</div>
+                )}
+
+                {!complianceMatrixError && complianceMatrix.length === 0 && (
+                  <div className="py-20 text-center bg-white rounded-[2rem] border border-slate-100">
+                    <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-300"><TableProperties size={32} /></div>
+                    <p className="text-slate-500 font-medium">No mandatory certificates assigned yet.</p>
+                    <p className="text-xs text-slate-400 mt-1">Assign mandatory certs when adding or editing employees.</p>
+                  </div>
+                )}
+
+                {complianceMatrix
+                  .filter((emp) => {
+                    const matchSearch =
+                      emp.employeeName.toLowerCase().includes(complianceSearch.toLowerCase()) ||
+                      emp.employeeNumber.toLowerCase().includes(complianceSearch.toLowerCase());
+                    const matchDept = complianceDeptFilter === 'All' || emp.department === complianceDeptFilter;
+                    return matchSearch && matchDept;
+                  })
+                  .map((emp) => {
+                    const done = emp.certs.filter((c) => c.status === 'Compliant' || c.status === 'Expiring Soon').length;
+                    const total = emp.certs.length;
+                    const allDone = done === total;
+                    const pct = total ? Math.round((done / total) * 100) : 0;
+
+                    return (
+                      <motion.div
+                        layout
+                        key={emp.employeeNumber}
+                        className={`bg-white rounded-[1.5rem] border shadow-sm p-6 ${allDone ? 'border-emerald-100' : 'border-slate-100'}`}
+                      >
+                        <div className="flex flex-col lg:flex-row lg:items-start gap-6">
+                          {/* Employee info */}
+                          <div className="flex items-center gap-4 lg:w-64 flex-shrink-0">
+                            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-sm ${allDone ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
+                              <User size={22} />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-sm font-black text-slate-800 truncate">{emp.employeeName}</p>
+                              <p className="text-[10px] text-slate-400 font-bold tracking-wider">{emp.employeeNumber}</p>
+                              <p className="text-[10px] text-slate-500 font-semibold mt-0.5">{emp.department}</p>
+                            </div>
+                          </div>
+
+                          {/* Progress */}
+                          <div className="lg:w-32 flex-shrink-0 flex flex-col justify-center">
+                            <div className="flex items-baseline gap-1 mb-1.5">
+                              <span className={`text-xl font-black ${allDone ? 'text-emerald-600' : 'text-slate-800'}`}>{done}</span>
+                              <span className="text-xs text-slate-400 font-bold">/ {total} done</span>
+                            </div>
+                            <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all ${allDone ? 'bg-emerald-500' : pct >= 60 ? 'bg-amber-400' : 'bg-rose-400'}`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                            <p className="text-[10px] text-slate-400 font-bold mt-1">{pct}% complete</p>
+                          </div>
+
+                          {/* Cert badges */}
+                          <div className="flex-1 flex flex-wrap gap-2">
+                            {emp.certs.map((cert) => {
+                              const isDone = cert.status === 'Compliant' || cert.status === 'Expiring Soon';
+                              const isPending = cert.status === 'Pending Approval';
+                              return (
+                                <div
+                                  key={cert.certType}
+                                  title={`${cert.certType}\nStatus: ${cert.status}`}
+                                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-bold border cursor-default max-w-[220px] ${
+                                    isDone
+                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
+                                      : isPending
+                                      ? 'bg-blue-50 text-blue-700 border-blue-100'
+                                      : 'bg-rose-50 text-rose-700 border-rose-100'
+                                  }`}
+                                >
+                                  {isDone ? (
+                                    <CheckCircle2 size={12} className="flex-shrink-0" />
+                                  ) : isPending ? (
+                                    <Clock size={12} className="flex-shrink-0" />
+                                  ) : (
+                                    <XCircle size={12} className="flex-shrink-0" />
+                                  )}
+                                  <span className="truncate">{cert.certType.replace('NISM-Series-', 'NISM-').split(':')[0]}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Send reminder button */}
+                          <div className="flex-shrink-0 flex items-center">
+                            <button
+                              onClick={() => handleSendIndividualReminder(emp.employeeNumber)}
+                              disabled={sendingReminderFor === emp.employeeNumber || allDone}
+                              title={allDone ? 'All certs complete — no reminder needed' : `Send reminder to ${emp.employeeName}`}
+                              className={`flex items-center gap-2 px-5 py-3 rounded-2xl font-bold text-xs uppercase tracking-widest transition-all shadow-sm ${
+                                allDone
+                                  ? 'bg-slate-50 text-slate-300 border border-slate-100 cursor-not-allowed'
+                                  : sendingReminderFor === emp.employeeNumber
+                                  ? 'bg-amber-100 text-amber-600 cursor-wait'
+                                  : 'bg-amber-50 text-amber-700 border border-amber-100 hover:bg-amber-500 hover:text-white hover:border-amber-500'
+                              }`}
+                            >
+                              <Send size={14} />
+                              <span>{sendingReminderFor === emp.employeeNumber ? 'Sending…' : 'Remind'}</span>
+                            </button>
+                          </div>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
               </motion.div>
             )}
 

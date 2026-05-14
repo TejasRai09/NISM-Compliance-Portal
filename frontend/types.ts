@@ -1,5 +1,5 @@
 export type UserRole = 'employee' | 'admin' | null;
-export type ActiveView = 'dashboard' | 'upload' | 'profile' | 'employees' | 'review' | 'certificates';
+export type ActiveView = 'dashboard' | 'upload' | 'profile' | 'employees' | 'review' | 'certificates' | 'compliance';
 export type CertStatus = 'Compliant' | 'Expiring Soon' | 'Expired' | 'Pending Approval' | 'Rejected';
 
 export interface Certificate {
