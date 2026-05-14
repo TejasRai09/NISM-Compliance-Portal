@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Search, X } from 'lucide-react';
+import { Plus, Search, X } from 'lucide-react';
 import type { Employee } from '../types';
 
 interface EmployeeFormModalProps {
@@ -29,6 +29,7 @@ const EmployeeFormModal = ({ isOpen, onClose, onSubmit, employee }: EmployeeForm
   const [certTypes, setCertTypes] = useState<string[]>([]);
   const [certSearch, setCertSearch] = useState('');
   const [selectedCerts, setSelectedCerts] = useState<string[]>([]);
+  const [othersText, setOthersText] = useState('');
 
   useEffect(() => {
     if (!isOpen) return;
@@ -54,6 +55,7 @@ const EmployeeFormModal = ({ isOpen, onClose, onSubmit, employee }: EmployeeForm
       setSelectedCerts([]);
     }
     setCertSearch('');
+    setOthersText('');
   }, [employee, isOpen]);
 
   if (!isOpen) return null;
@@ -291,6 +293,52 @@ const EmployeeFormModal = ({ isOpen, onClose, onSubmit, employee }: EmployeeForm
                       </label>
                     );
                   })}
+                </div>
+                {/* Others: add a custom cert type */}
+                <div className="p-3 border-t border-slate-100 bg-slate-50/50">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Others — add custom</p>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={othersText}
+                      onChange={(e) => setOthersText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const v = othersText.trim();
+                          if (v && !selectedCerts.includes(v)) setSelectedCerts((p) => [...p, v]);
+                          setOthersText('');
+                        }
+                      }}
+                      placeholder="Type certificate name and press Add"
+                      className="flex-1 px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-300 focus:ring-1 ring-indigo-100 transition-all text-slate-800 placeholder:text-slate-400"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const v = othersText.trim();
+                        if (v && !selectedCerts.includes(v)) setSelectedCerts((p) => [...p, v]);
+                        setOthersText('');
+                      }}
+                      className="flex items-center gap-1 px-3 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all"
+                    >
+                      <Plus size={13} />
+                      Add
+                    </button>
+                  </div>
+                  {/* Custom (non-standard) certs already added */}
+                  {selectedCerts.filter((c) => !certTypes.includes(c)).length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {selectedCerts.filter((c) => !certTypes.includes(c)).map((c) => (
+                        <span key={c} className="flex items-center gap-1 px-2.5 py-1 bg-indigo-100 text-indigo-700 text-[10px] font-bold rounded-full">
+                          {c}
+                          <button type="button" onClick={() => toggleCert(c)} className="hover:text-rose-600 transition-colors">
+                            <X size={10} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
