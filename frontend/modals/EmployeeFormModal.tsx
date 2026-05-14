@@ -32,7 +32,7 @@ const EmployeeFormModal = ({ isOpen, onClose, onSubmit, employee }: EmployeeForm
 
   useEffect(() => {
     if (!isOpen) return;
-    fetch('/api/certificates/types')
+    fetch('/api/certificates/types', { cache: 'no-store' })
       .then((r) => r.json())
       .then((payload) => {
         if (payload.status === 'ok') setCertTypes((payload.data || []).map((row: { name: string }) => row.name));

@@ -74,7 +74,7 @@ const EmployeePortal = ({ employee, onLogout }: { employee: Employee | null; onL
     const loadModules = async () => {
       setModulesError(null);
       try {
-        const res = await fetch('/api/certificates/types');
+        const res = await fetch('/api/certificates/types', { cache: 'no-store' });
         const payload = await res.json();
         if (!res.ok) throw new Error(payload?.message || 'Failed to load modules');
         setModuleOptions((payload.data || []).map((row: { name: string }) => row.name));
