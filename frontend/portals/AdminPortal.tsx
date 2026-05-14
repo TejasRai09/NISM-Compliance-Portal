@@ -322,6 +322,7 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
       setIsModalOpen(false);
       setEditingEmployee(undefined);
       await loadEmployees();
+      await loadComplianceMatrix();
     } catch (error) {
       setEmployeesError(String(error));
     }

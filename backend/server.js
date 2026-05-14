@@ -68,7 +68,19 @@ const ALL_CERT_TYPES = [
   'IRDAI Third Party Administrator (TPA) License',
   'IRDAI Point of Sales Person (POSP) Certificate',
   'IRDAI Web Aggregator License',
-  'IRDAI Appointed Person / Specified Person Certificate'
+  'IRDAI Appointed Person / Specified Person Certificate',
+  'NCFM: Capital Market (Dealers) Module',
+  'NCFM: Derivatives Market (Dealers) Module',
+  'NCFM: Currency Derivatives: A Beginner\'s Module',
+  'NCFM: Commodities Market Module',
+  'NCFM: FIMMDA-NSE Debt Market (Basic) Module',
+  'NCFM: Investment Analysis and Portfolio Management Module',
+  'NCFM: Compliance Officers (Brokers) Module',
+  'NCFM: Algorithmic Trading Module',
+  'BCFM: Securities Market Basic Module',
+  'BCFM: Equity Derivatives Basic Module',
+  'BCFM: Currency and Interest Rate Derivatives Basic Module',
+  'BCFM: Mutual Fund Basic Module'
 ];
 
 const envValue = (value = '') => String(value).trim().replace(/^"|"$/g, '');
