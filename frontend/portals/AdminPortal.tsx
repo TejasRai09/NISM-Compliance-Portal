@@ -355,6 +355,23 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
 
   return (
     <div className="min-h-screen bg-slate-50 flex">
+      {/* Global toast — visible on any tab */}
+      <AnimatePresence>
+        {reminderToast && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className={`fixed top-6 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-full text-sm font-bold shadow-xl tracking-wide ${
+              reminderToast.type === 'success'
+                ? 'bg-emerald-600 text-white shadow-emerald-200'
+                : 'bg-rose-600 text-white shadow-rose-200'
+            }`}
+          >
+            {reminderToast.message}
+          </motion.div>
+        )}
+      </AnimatePresence>
       <motion.aside initial={{ x: -250 }} animate={{ x: 0 }} className="w-72 bg-white border-r border-slate-100 flex flex-col z-20">
         <div className="p-8 border-b border-slate-50">
           <img src={LOGO_URL} alt="Logo" className="w-full h-12 object-contain" />
@@ -445,17 +462,6 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
             </div>
             {view === 'dashboard' && (
               <div className="flex flex-col items-end gap-3">
-                {reminderToast && (
-                  <div
-                    className={`px-5 py-2.5 rounded-full text-xs font-bold uppercase tracking-widest shadow-lg ${
-                      reminderToast.type === 'success'
-                        ? 'bg-emerald-600 text-white shadow-emerald-200'
-                        : 'bg-rose-600 text-white shadow-rose-200'
-                    }`}
-                  >
-                    {reminderToast.message}
-                  </div>
-                )}
                 <button
                   onClick={handleSendReminders}
                   disabled={isSendingReminders}
