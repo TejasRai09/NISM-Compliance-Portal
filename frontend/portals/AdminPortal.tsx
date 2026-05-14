@@ -79,6 +79,8 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
   const [complianceSearch, setComplianceSearch] = useState('');
   const [complianceDeptFilter, setComplianceDeptFilter] = useState('All');
   const [sendingReminderFor, setSendingReminderFor] = useState<string | null>(null);
+  const [rejectingCertId, setRejectingCertId] = useState<string | null>(null);
+  const [rejectComment, setRejectComment] = useState('');
 
   const handleSendReminders = async () => {
     setIsSendingReminders(true);
@@ -280,12 +282,31 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
     setCertificatePage(1);
   }, [certSearchTerm, certStatusFilter]);
 
-  const handleReviewAction = async (id: string, action: 'approve' | 'reject') => {
+  const handleReviewAction = async (id: string, action: 'approve' | 'reject', comment = '') => {
     try {
-      const res = await fetch(`/api/certificates/${id}/${action}`, { method: 'POST' });
+      const res = await fetch(`/api/certificates/${id}/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment })
+      });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.message || 'Action failed');
+      setRejectingCertId(null);
+      setRejectComment('');
       await loadReviewQueue();
+      await loadAllCertificates();
+      await loadAdminStats();
+    } catch (error) {
+      setCertificatesError(String(error));
+    }
+  };
+
+  const handleDeleteCertificate = async (id: string) => {
+    if (!confirm('Delete this certificate permanently?')) return;
+    try {
+      const res = await fetch(`/api/certificates/${id}`, { method: 'DELETE' });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.message || 'Failed to delete certificate');
       await loadAllCertificates();
       await loadAdminStats();
     } catch (error) {
@@ -749,6 +770,7 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
                         <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Expiry</th>
                         <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Status</th>
                         <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center">File</th>
+                        <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50">
@@ -780,6 +802,15 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
                             ) : (
                               <span className="text-xs text-slate-300">—</span>
                             )}
+                          </td>
+                          <td className="px-6 py-4 text-center">
+                            <button
+                              onClick={() => handleDeleteCertificate(cert.id)}
+                              className="p-2 text-rose-500 bg-rose-50 hover:bg-rose-500 hover:text-white rounded-xl transition-all shadow-sm"
+                              title="Delete Certificate"
+                            >
+                              <Trash2 size={16} />
+                            </button>
                           </td>
                         </tr>
                       ))}
@@ -840,59 +871,99 @@ const AdminPortal = ({ onLogout }: { onLogout: () => void }) => {
                     <motion.div
                       layout
                       key={rev.id}
-                      className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm flex flex-col lg:flex-row items-center justify-between gap-8"
+                      className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm flex flex-col gap-6"
                     >
-                      <div className="flex items-start space-x-6">
-                        <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600 flex-shrink-0">
-                          <FileText size={32} />
+                      <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-8">
+                        <div className="flex items-start space-x-6">
+                          <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600 flex-shrink-0">
+                            <FileText size={32} />
+                          </div>
+                          <div>
+                            <div className="flex items-center space-x-2 mb-1">
+                              <h4 className="text-lg font-bold text-slate-800">{rev.moduleName}</h4>
+                              <span className="px-2 py-0.5 bg-blue-50 text-blue-600 text-[9px] font-black uppercase rounded-full border border-blue-100">
+                                Pending Review
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
+                              <p className="text-slate-400 font-bold uppercase tracking-wider">
+                                Employee: <span className="text-slate-800">{rev.employeeName} ({rev.employeeNumber || '—'})</span>
+                              </p>
+                              <p className="text-slate-400 font-bold uppercase tracking-wider">
+                                Cert #: <span className="text-slate-800">{rev.certNumber}</span>
+                              </p>
+                              <p className="text-slate-400 font-bold uppercase tracking-wider">
+                                Issue Date: <span className="text-slate-800">{formatDisplayDate(rev.issueDate)}</span>
+                              </p>
+                              <p className="text-slate-400 font-bold uppercase tracking-wider">
+                                Expiry Date: <span className="text-slate-800">{formatDisplayDate(rev.expiryDate)}</span>
+                              </p>
+                            </div>
+                          </div>
                         </div>
-                        <div>
-                          <div className="flex items-center space-x-2 mb-1">
-                            <h4 className="text-lg font-bold text-slate-800">{rev.moduleName}</h4>
-                            <span className="px-2 py-0.5 bg-blue-50 text-blue-600 text-[9px] font-black uppercase rounded-full border border-blue-100">
-                              Pending Review
-                            </span>
-                          </div>
-                          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
-                            <p className="text-slate-400 font-bold uppercase tracking-wider">
-                              Employee: <span className="text-slate-800">{rev.employeeName} ({rev.employeeNumber || '—'})</span>
-                            </p>
-                            <p className="text-slate-400 font-bold uppercase tracking-wider">
-                              Cert #: <span className="text-slate-800">{rev.certNumber}</span>
-                            </p>
-                            <p className="text-slate-400 font-bold uppercase tracking-wider">
-                              Issue Date: <span className="text-slate-800">{formatDisplayDate(rev.issueDate)}</span>
-                            </p>
-                            <p className="text-slate-400 font-bold uppercase tracking-wider">
-                              Expiry Date: <span className="text-slate-800">{formatDisplayDate(rev.expiryDate)}</span>
-                            </p>
-                          </div>
+                        <div className="flex items-center space-x-4 flex-shrink-0">
+                          <button
+                            className="flex items-center space-x-2 px-6 py-3 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-xl font-bold text-xs uppercase tracking-widest transition-all"
+                            title="Download Document"
+                            onClick={() => rev.filePath && window.open(rev.filePath, '_blank')}
+                          >
+                            <Download size={16} />
+                            <span>Download</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setRejectingCertId(rejectingCertId === rev.id ? null : rev.id);
+                              setRejectComment('');
+                            }}
+                            className={`p-3 rounded-xl transition-all ${rejectingCertId === rev.id ? 'bg-rose-500 text-white' : 'text-rose-500 hover:bg-rose-50'}`}
+                            title="Reject"
+                          >
+                            <ThumbsDown size={20} />
+                          </button>
+                          <button
+                            onClick={() => handleReviewAction(rev.id, 'approve')}
+                            className="flex items-center space-x-2 px-6 py-3 bg-emerald-600 text-white rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100"
+                          >
+                            <ThumbsUp size={16} />
+                            <span>Approve</span>
+                          </button>
                         </div>
                       </div>
-                      <div className="flex items-center space-x-4">
-                        <button className="flex items-center space-x-2 px-6 py-3 bg-slate-50 text-slate-500 hover:bg-slate-100 rounded-xl font-bold text-xs uppercase tracking-widest transition-all">
-                          <Eye size={16} />
-                          <span>Preview</span>
-                        </button>
-                        <button
-                          className="flex items-center space-x-2 px-6 py-3 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-xl font-bold text-xs uppercase tracking-widest transition-all"
-                          title="Download Document"
-                          onClick={() => rev.filePath && window.open(rev.filePath, '_blank')}
-                        >
-                          <Download size={16} />
-                          <span>Download</span>
-                        </button>
-                        <button onClick={() => handleReviewAction(rev.id, 'reject')} className="p-3 text-rose-500 hover:bg-rose-50 rounded-xl transition-all">
-                          <ThumbsDown size={20} />
-                        </button>
-                        <button
-                          onClick={() => handleReviewAction(rev.id, 'approve')}
-                          className="flex items-center space-x-2 px-6 py-3 bg-emerald-600 text-white rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100"
-                        >
-                          <ThumbsUp size={16} />
-                          <span>Approve</span>
-                        </button>
-                      </div>
+                      {/* Inline rejection comment form */}
+                      <AnimatePresence>
+                        {rejectingCertId === rev.id && (
+                          <motion.div
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: 'auto' }}
+                            exit={{ opacity: 0, height: 0 }}
+                            className="border-t border-rose-100 pt-5 overflow-hidden"
+                          >
+                            <p className="text-xs font-bold text-rose-600 uppercase tracking-wider mb-2">Reason for Rejection</p>
+                            <textarea
+                              rows={3}
+                              value={rejectComment}
+                              onChange={(e) => setRejectComment(e.target.value)}
+                              placeholder="Explain why this certificate is being rejected. This comment will be emailed to the employee."
+                              className="w-full px-4 py-3 text-sm bg-rose-50 border border-rose-200 rounded-xl outline-none focus:border-rose-400 focus:ring-2 ring-rose-100 resize-none text-slate-800 placeholder:text-slate-400 transition-all"
+                            />
+                            <div className="flex items-center gap-3 mt-3">
+                              <button
+                                onClick={() => { setRejectingCertId(null); setRejectComment(''); }}
+                                className="px-5 py-2.5 bg-slate-100 text-slate-500 rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-slate-200 transition-all"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                onClick={() => handleReviewAction(rev.id, 'reject', rejectComment)}
+                                className="flex items-center gap-2 px-5 py-2.5 bg-rose-600 text-white rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-rose-700 transition-all shadow-lg shadow-rose-100"
+                              >
+                                <Send size={13} />
+                                Confirm Rejection & Notify Employee
+                              </button>
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </motion.div>
                   ))
                 )}

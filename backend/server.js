@@ -169,6 +169,10 @@ const ensureMandatoryTables = async () => {
       UNIQUE KEY uniq_emp_cert (employee_number, certificate_type)
     )
   `);
+  // Add rejection_comment column if it doesn't exist
+  await pool.query(`
+    ALTER TABLE certificates ADD COLUMN IF NOT EXISTS rejection_comment TEXT NULL
+  `).catch(() => {});
   for (const name of ALL_CERT_TYPES) {
     await pool.query('INSERT IGNORE INTO certificate_types (name) VALUES (?)', [name]);
   }
@@ -843,13 +847,60 @@ app.post('/api/certificates/:id/approve', async (req, res) => {
 app.post('/api/certificates/:id/reject', async (req, res) => {
   try {
     const { id } = req.params;
-    const [result] = await pool.query('UPDATE certificates SET status = ? WHERE id = ?', ['Rejected', id]);
+    const comment = String(req.body?.comment || '').trim();
+
+    const [certRows] = await pool.query(`
+      SELECT c.module_name, c.cert_number, e.employee_name, e.email, e.manager_email
+      FROM certificates c
+      JOIN employees e ON e.employee_number = c.employee_number
+      WHERE c.id = ?
+    `, [id]);
+
+    if (certRows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Certificate not found.' });
+    }
+
+    await pool.query(
+      'UPDATE certificates SET status = ?, rejection_comment = ? WHERE id = ?',
+      ['Rejected', comment || null, id]
+    );
+
+    // Send rejection email to employee (and CC manager)
+    const row = certRows[0];
+    if (row.email) {
+      const commentSection = comment
+        ? `\n\nReason for rejection:\n"${comment}"\n\nPlease re-submit a corrected certificate after addressing the above.`
+        : '\n\nPlease contact your compliance officer for further details and re-submit the certificate.';
+
+      const body = `Dear ${row.employee_name},\n\nYour certificate submission has been reviewed and rejected by the compliance team.\n\nModule: ${row.module_name}\nCertificate No: ${row.cert_number}${commentSection}\n\nRegards,\nZ-PRISM Compliance System\nZuari Finserv Ltd`;
+
+      const recipients = [row.email];
+      if (row.manager_email && row.manager_email !== row.email) recipients.push(row.manager_email);
+
+      await mailer.sendMail({
+        from: smtpUser || 'no-reply@adventz.com',
+        to: recipients.join(','),
+        subject: `Certificate Rejected – ${row.module_name}`,
+        text: body
+      }).catch((err) => console.error('[Reject] Email send error:', err.message));
+    }
+
+    res.json({ status: 'ok' });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to reject certificate', error: String(error) });
+  }
+});
+
+app.delete('/api/certificates/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const [result] = await pool.query('DELETE FROM certificates WHERE id = ?', [id]);
     if (result.affectedRows === 0) {
       return res.status(404).json({ status: 'error', message: 'Certificate not found.' });
     }
     res.json({ status: 'ok' });
   } catch (error) {
-    res.status(500).json({ status: 'error', message: 'Failed to reject certificate', error: String(error) });
+    res.status(500).json({ status: 'error', message: 'Failed to delete certificate', error: String(error) });
   }
 });
 
